@@ -11,6 +11,7 @@ pub mod queue;
 pub mod antispam;
 
 use axum::{
+    extract::{Request, State},
     middleware as axum_middleware,
     routing::{get, post},
     Router,
@@ -30,7 +31,7 @@ pub fn build_router(state: AppState) -> Router {
 
     // Public routes (no auth required)
     let public_routes = Router::new()
-        .route("/", get(|| async { axum::response::Redirect::permanent("/ui/login.html") }))
+        .route("/", get(root_redirect))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/health", get(health_check))
@@ -89,6 +90,26 @@ pub fn build_router(state: AppState) -> Router {
         .merge(api_routes)
         .layer(cors)
         .with_state(state)
+}
+
+async fn root_redirect(
+    State(state): State<AppState>,
+    request: Request,
+) -> axum::response::Redirect {
+    // If the request carries a valid session cookie, send to dashboard.
+    if let Some(cookie_header) = request.headers().get(axum::http::header::COOKIE) {
+        if let Ok(cookies) = cookie_header.to_str() {
+            for cookie in cookies.split(';') {
+                let cookie = cookie.trim();
+                if let Some(token) = cookie.strip_prefix("lg_session=") {
+                    if middleware::validate_jwt(token, &state.jwt_secret).is_some() {
+                        return axum::response::Redirect::to("/ui/index.html");
+                    }
+                }
+            }
+        }
+    }
+    axum::response::Redirect::to("/ui/login.html")
 }
 
 async fn health_check() -> &'static str {

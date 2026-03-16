@@ -1,6 +1,6 @@
 [Unit]
 Description=ServerWall Multi-Protocol Load Balancer
-Documentation=https://github.com/serverwall/serverwall
+Documentation=https://github.com/mattx86/serverwall
 After=network.target
 Wants=serverwall-webui.service
 

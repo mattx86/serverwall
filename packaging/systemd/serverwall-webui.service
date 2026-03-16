@@ -1,6 +1,6 @@
 [Unit]
 Description=ServerWall Web UI and Management API
-Documentation=https://github.com/serverwall/serverwall
+Documentation=https://github.com/mattx86/serverwall
 After=network.target serverwall.service
 BindsTo=serverwall.service
 

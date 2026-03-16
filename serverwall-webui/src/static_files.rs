@@ -9,19 +9,9 @@ use rust_embed::Embed;
 #[folder = "../web-ui/"]
 struct WebUiAssets;
 
-/// Serve the main dashboard page.
-pub async fn serve_index() -> Response {
-    serve_embedded_file("index.html").await
-}
-
 /// Serve the login page.
 pub async fn serve_login() -> Response {
     serve_embedded_file("login.html").await
-}
-
-/// Serve the queue management page.
-pub async fn serve_queue() -> Response {
-    serve_embedded_file("queue.html").await
 }
 
 /// Serve any embedded static asset by path (catch-all for /ui/{*path}).

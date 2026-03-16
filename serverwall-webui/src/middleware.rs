@@ -84,7 +84,7 @@ pub async fn auth(
         .into_response()
 }
 
-fn validate_jwt(token: &str, secret: &str) -> Option<Claims> {
+pub fn validate_jwt(token: &str, secret: &str) -> Option<Claims> {
     let key = DecodingKey::from_secret(secret.as_bytes());
     let validation = Validation::default();
     decode::<Claims>(token, &key, &validation)

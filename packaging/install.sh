@@ -70,6 +70,10 @@ echo ""
 echo "Running first-time initialisation..."
 "${BIN_DIR}/serverwall" --init
 
+# ─── Fix ownership so the serverwall user can access all files ────────────────
+chown -R serverwall: /opt/serverwall
+echo "[+] Set ownership of ${BASE_DIR} to serverwall"
+
 # ─── Enable and start services ────────────────────────────────────────────────
 echo ""
 systemctl enable serverwall serverwall-webui

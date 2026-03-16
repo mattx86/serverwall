@@ -11,6 +11,7 @@ use rustls::ServerConfig;
 use rustls_pemfile::{certs, private_key};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
+use tower::Service;
 use tracing_subscriber::EnvFilter;
 
 use serverwall_core::config::load_config;
@@ -146,7 +147,7 @@ async fn serve_https(app: axum::Router, addr: &str, tls_config: ServerConfig) {
                 Ok(tls_stream) => {
                     let io = hyper_util::rt::TokioIo::new(tls_stream);
                     let service = hyper::service::service_fn(move |req| {
-                        let app = app.clone();
+                        let mut app = app.clone();
                         async move { app.call(req).await }
                     });
                     if let Err(e) = hyper_util::server::conn::auto::Builder::new(

@@ -1,12 +1,11 @@
 use std::net::IpAddr;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use serverwall_core::config::schema::AntispamConfig;
 
-use crate::headers::SpamHeaderBuilder;
 use crate::result::{AuthenticationResults, CheckOutcome, SpamReport};
-use crate::score::{CheckCategory, ScoreContribution, SpamScore, SpamVerdict};
+use crate::score::{ScoreContribution, SpamScore};
 
 /// Envelope-level context available before message DATA.
 pub struct EnvelopeContext {

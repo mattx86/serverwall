@@ -1,12 +1,3 @@
-/// Output format selection.
-#[derive(Clone, Copy)]
-pub enum OutputFormat {
-    /// Human-readable table format.
-    Table,
-    /// Machine-readable JSON format.
-    Json,
-}
-
 /// Format and print a list of rows as a table with proper column alignment.
 pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
     if headers.is_empty() {
@@ -53,9 +44,3 @@ pub fn print_table(headers: &[&str], rows: &[Vec<String>]) {
     }
 }
 
-/// Print a value as formatted JSON.
-pub fn print_json(value: &serde_json::Value) {
-    if let Ok(s) = serde_json::to_string_pretty(value) {
-        println!("{s}");
-    }
-}

@@ -4,7 +4,6 @@ use std::process::Stdio;
 use async_trait::async_trait;
 use regex::Regex;
 use tempfile::NamedTempFile;
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::pipeline::{MessageContext, PostDataCheck};
@@ -95,7 +94,7 @@ impl PostDataCheck for AntivirusCheck {
         for (scanner_name, scan_result) in self.scanners.iter().zip(results) {
             match scan_result {
                 ScanResult::Clean => {}
-                ScanResult::Virus(virus_name) => {
+                ScanResult::Virus(_virus_name) => {
                     virus_found = true;
                     let score = self.weight * 1.0;
                     total_severity += score;

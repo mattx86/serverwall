@@ -35,11 +35,6 @@ impl TcpListenerTask {
         }
     }
 
-    /// Returns the current number of active connections across all listeners.
-    pub fn active_connections(&self) -> usize {
-        self.active_connections.load(Ordering::Relaxed)
-    }
-
     /// Bind to all configured addresses and accept connections in a loop.
     ///
     /// For each accepted connection the `handler` closure is invoked with:

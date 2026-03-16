@@ -2,12 +2,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
-use serverwall_core::config::schema::AntispamConfig;
 use serverwall_core::logging::PostfixLogEntry;
-use serverwall_core::proto::smtp::{self, SmtpCommand, SmtpResponse};
+use serverwall_core::proto::smtp::{self, SmtpCommand};
 
 use serverwall_antispam::headers::SpamHeaderBuilder;
 use serverwall_antispam::lists::{Blocklist, Whitelist};
@@ -97,7 +96,7 @@ impl SmtpProxy {
         let mut rcpt_to: Vec<String> = Vec::new();
         let mut helo_domain = String::new();
         let mut early_talker = false;
-        let mut pipelining_detected = false;
+        let pipelining_detected = false;
         let mut command_count: u32 = 0;
 
         // ---- Phase 1: Send banner ----
@@ -304,6 +303,7 @@ impl SmtpProxy {
                             auth_results: AuthenticationResults::default(),
                         };
 
+                        self.state = SmtpState::Proxying;
                         let backend_resp =
                             self.forward_to_backend(&data_buffer, &mail_from, &rcpt_to, &report).await;
                         match backend_resp {
@@ -397,6 +397,7 @@ impl SmtpProxy {
                                 }
                                 SpamVerdict::Suspect | SpamVerdict::Clean => {
                                     // Forward to backend with headers.
+                                    self.state = SmtpState::Proxying;
                                     let backend_resp =
                                         self.forward_to_backend(&data_buffer, &mail_from, &rcpt_to, &report).await;
                                     match backend_resp {

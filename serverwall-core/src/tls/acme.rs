@@ -37,7 +37,12 @@ impl AcmeManager {
             return Ok(());
         }
         // TODO: implement ACME order flow using instant-acme
-        tracing::warn!("ACME run loop is not yet implemented");
+        tracing::warn!(
+            directory_url = %self.directory_url,
+            email = ?self.email,
+            storage_dir = %self.storage_dir.display(),
+            "ACME run loop is not yet implemented",
+        );
         Ok(())
     }
 }

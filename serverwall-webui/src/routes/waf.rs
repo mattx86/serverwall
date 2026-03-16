@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::{Path, State}, Json};
 use serde_json::{json, Value};
 
 use crate::state::AppState;
@@ -22,7 +22,7 @@ pub async fn list(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"waf_rules": rulesets}))
 }
 
-pub async fn get() -> Json<Value> {
+pub async fn get(Path(_name): Path<String>) -> Json<Value> {
     Json(json!({"error": "WAF rulesets are managed via serverwall.toml"}))
 }
 
@@ -30,10 +30,10 @@ pub async fn create() -> Json<Value> {
     Json(json!({"error": "WAF creation via API is not supported; edit serverwall.toml and reload"}))
 }
 
-pub async fn update() -> Json<Value> {
+pub async fn update(Path(_name): Path<String>) -> Json<Value> {
     Json(json!({"error": "WAF update via API is not supported; edit serverwall.toml and reload"}))
 }
 
-pub async fn delete() -> Json<Value> {
+pub async fn delete(Path(_name): Path<String>) -> Json<Value> {
     Json(json!({"error": "WAF deletion via API is not supported; edit serverwall.toml and reload"}))
 }

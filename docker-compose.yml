@@ -54,9 +54,10 @@ services:
     ports:
       - "8443:8443"
     volumes:
-      - serverwall-config:/etc/serverwall
+      - serverwall-data:/opt/serverwall
     command: >
-      sh -c "serverwall --init && serverwall-api --listen 0.0.0.0:8443"
+      sh -c "/opt/serverwall/bin/serverwall --init &&
+             /opt/serverwall/bin/serverwall --config /opt/serverwall/etc/serverwall.toml"
     profiles: ["run"]
 
   release:
@@ -70,4 +71,4 @@ services:
 volumes:
   cargo-cache:
   target-cache:
-  serverwall-config:
+  serverwall-data:

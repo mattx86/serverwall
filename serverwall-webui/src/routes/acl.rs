@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::{Path, State}, Json};
 use serde_json::{json, Value};
 
 use crate::state::AppState;
@@ -22,7 +22,7 @@ pub async fn list(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"acls": acls}))
 }
 
-pub async fn get() -> Json<Value> {
+pub async fn get(Path(_id): Path<String>) -> Json<Value> {
     Json(json!({"error": "ACL is managed via serverwall.toml"}))
 }
 
@@ -30,10 +30,10 @@ pub async fn create() -> Json<Value> {
     Json(json!({"error": "ACL creation via API is not supported; edit serverwall.toml and reload"}))
 }
 
-pub async fn update() -> Json<Value> {
+pub async fn update(Path(_id): Path<String>) -> Json<Value> {
     Json(json!({"error": "ACL update via API is not supported; edit serverwall.toml and reload"}))
 }
 
-pub async fn delete() -> Json<Value> {
+pub async fn delete(Path(_id): Path<String>) -> Json<Value> {
     Json(json!({"error": "ACL deletion via API is not supported; edit serverwall.toml and reload"}))
 }

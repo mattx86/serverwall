@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{extract::{Path, State}, Json};
 use serde_json::{json, Value};
 
 use crate::state::AppState;
@@ -28,8 +28,8 @@ pub async fn list(State(state): State<AppState>) -> Json<Value> {
     Json(json!({"certificates": certs}))
 }
 
-/// GET /api/certificates/:id
-pub async fn get() -> Json<Value> {
+/// GET /api/certs/:id
+pub async fn get(Path(_id): Path<String>) -> Json<Value> {
     Json(json!({"error": "use GET /api/certs to list all certificates"}))
 }
 
@@ -40,7 +40,7 @@ pub async fn create() -> Json<Value> {
     Json(json!({"error": "certificate import via API is not yet implemented; place files in cert_dir and reload"}))
 }
 
-/// DELETE /api/certificates/:id
-pub async fn delete() -> Json<Value> {
+/// DELETE /api/certs/:id
+pub async fn delete(Path(_id): Path<String>) -> Json<Value> {
     Json(json!({"error": "certificate deletion via API is not supported; manage files directly"}))
 }

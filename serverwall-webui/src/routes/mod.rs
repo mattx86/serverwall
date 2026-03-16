@@ -12,7 +12,7 @@ pub mod antispam;
 
 use axum::{
     middleware as axum_middleware,
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -63,6 +63,7 @@ pub fn build_router(state: AppState) -> Router {
         // Certificates
         .route("/api/certs", get(certificates::list))
         .route("/api/certs/import", post(certificates::create))
+        .route("/api/certs/{id}", get(certificates::get).delete(certificates::delete))
         // Antispam
         .route("/api/antispam/stats", get(antispam::stats))
         // Reload
@@ -70,9 +71,11 @@ pub fn build_router(state: AppState) -> Router {
         // Logs
         .route("/api/logs", get(logs::stream))
         // ACL
-        .route("/api/acl", get(acl::list))
+        .route("/api/acl", get(acl::list).post(acl::create))
+        .route("/api/acl/{id}", get(acl::get).put(acl::update).delete(acl::delete))
         // WAF
-        .route("/api/waf", get(waf::list))
+        .route("/api/waf", get(waf::list).post(waf::create))
+        .route("/api/waf/{name}", get(waf::get).put(waf::update).delete(waf::delete))
         // Web UI (protected)
         .route("/ui/", get(static_files::serve_index))
         .route("/ui/index.html", get(static_files::serve_index))

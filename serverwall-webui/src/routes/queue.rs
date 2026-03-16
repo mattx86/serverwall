@@ -282,16 +282,6 @@ pub async fn stats(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-/// Search is now merged into the list endpoint via filters.
-pub async fn search(
-    State(state): State<AppState>,
-    Query(params): Query<QueueListParams>,
-) -> Json<Value> {
-    // Delegate to list
-    let result = list(State(state), Query(params)).await;
-    result
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

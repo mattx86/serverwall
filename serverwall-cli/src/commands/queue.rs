@@ -77,7 +77,7 @@ pub fn run(config_path: &Path, args: QueueArgs) -> anyhow::Result<()> {
 
             if args.json {
                 let json: Vec<_> = messages.iter().map(|m| serde_json::json!({
-                    "id": m.metadata.message_id,
+                    "id": m.id,
                     "sender": m.envelope.mail_from,
                     "recipients": m.envelope.rcpt_to,
                     "status": format!("{:?}", m.metadata.status).to_lowercase(),
@@ -91,44 +91,40 @@ pub fn run(config_path: &Path, args: QueueArgs) -> anyhow::Result<()> {
 
             println!("Total messages: {}\n", messages.len());
             let rows: Vec<Vec<String>> = messages.iter().map(|m| vec![
-                m.metadata.message_id.to_string(),
+                m.id.clone(),
                 m.envelope.mail_from.clone(),
                 m.envelope.rcpt_to.join(", "),
                 format!("{:?}", m.metadata.status).to_lowercase(),
-                format_size(m.metadata.size),
+                format_size(m.metadata.size as u64),
                 m.metadata.attempts.to_string(),
             ]).collect();
             output::print_table(&["ID", "SENDER", "RECIPIENTS", "STATUS", "SIZE", "ATTEMPTS"], &rows);
         }
 
         QueueAction::Delete { id } => {
-            let id = parse_uuid(&id)?;
-            spool.remove(id).map_err(|e| anyhow::anyhow!("failed to delete: {}", e))?;
+            spool.remove(&id).map_err(|e| anyhow::anyhow!("failed to delete: {}", e))?;
             println!("Message {} deleted.", id);
         }
 
         QueueAction::Retry { id } => {
-            let id = parse_uuid(&id)?;
-            let mut msg = spool.get(id).map_err(|e| anyhow::anyhow!("{}", e))?;
+            let (mut msg, _) = spool.dequeue(&id).map_err(|e| anyhow::anyhow!("{}", e))?;
             msg.metadata.status = QueueStatus::Pending;
-            msg.metadata.next_retry = Some(chrono::Utc::now());
-            spool.update_metadata(id, msg.metadata).map_err(|e| anyhow::anyhow!("{}", e))?;
+            msg.metadata.next_retry = chrono::Utc::now();
+            spool.update_metadata(&id, &msg.metadata).map_err(|e| anyhow::anyhow!("{}", e))?;
             println!("Message {} queued for immediate retry.", id);
         }
 
         QueueAction::Hold { id } => {
-            let id = parse_uuid(&id)?;
-            let mut msg = spool.get(id).map_err(|e| anyhow::anyhow!("{}", e))?;
+            let (mut msg, _) = spool.dequeue(&id).map_err(|e| anyhow::anyhow!("{}", e))?;
             msg.metadata.status = QueueStatus::Held;
-            spool.update_metadata(id, msg.metadata).map_err(|e| anyhow::anyhow!("{}", e))?;
+            spool.update_metadata(&id, &msg.metadata).map_err(|e| anyhow::anyhow!("{}", e))?;
             println!("Message {} held.", id);
         }
 
         QueueAction::Release { id } => {
-            let id = parse_uuid(&id)?;
-            let mut msg = spool.get(id).map_err(|e| anyhow::anyhow!("{}", e))?;
+            let (mut msg, _) = spool.dequeue(&id).map_err(|e| anyhow::anyhow!("{}", e))?;
             msg.metadata.status = QueueStatus::Pending;
-            spool.update_metadata(id, msg.metadata).map_err(|e| anyhow::anyhow!("{}", e))?;
+            spool.update_metadata(&id, &msg.metadata).map_err(|e| anyhow::anyhow!("{}", e))?;
             println!("Message {} released to pending.", id);
         }
 
@@ -137,11 +133,10 @@ pub fn run(config_path: &Path, args: QueueArgs) -> anyhow::Result<()> {
             let mut count = 0usize;
             for msg in &messages {
                 if matches!(msg.metadata.status, QueueStatus::Deferred) {
-                    let id = msg.metadata.message_id;
                     let mut updated = msg.clone();
                     updated.metadata.status = QueueStatus::Pending;
-                    updated.metadata.next_retry = Some(chrono::Utc::now());
-                    let _ = spool.update_metadata(id, updated.metadata);
+                    updated.metadata.next_retry = chrono::Utc::now();
+                    let _ = spool.update_metadata(&msg.id, &updated.metadata);
                     count += 1;
                 }
             }
@@ -175,10 +170,6 @@ pub fn run(config_path: &Path, args: QueueArgs) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn parse_uuid(s: &str) -> anyhow::Result<uuid::Uuid> {
-    uuid::Uuid::parse_str(s).map_err(|_| anyhow::anyhow!("invalid message ID: {}", s))
 }
 
 fn format_size(bytes: u64) -> String {

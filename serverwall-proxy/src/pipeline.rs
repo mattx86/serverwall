@@ -114,8 +114,5 @@ impl RequestPipeline {
         }).cloned()
     }
 
-    /// Returns a reference to the backends.
-    pub fn backends(&self) -> &[Arc<Backend>] {
-        &self.backends
-    }
 }
+

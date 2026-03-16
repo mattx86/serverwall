@@ -24,23 +24,18 @@ use crate::proxy::HttpProxy;
 use crate::proxy::ImapProxy;
 use crate::proxy::SmtpProxy;
 use crate::proxy::TcpProxy;
+use crate::reload::ReloadHandler;
 
 /// Orchestrates all listeners, proxies, and health checkers.
 pub struct Server {
     config: ServerWallConfig,
+    config_path: std::path::PathBuf,
 }
 
 impl Server {
     /// Create a new server from the loaded configuration.
-    pub fn from_config(config: ServerWallConfig) -> Self {
-        Self { config }
-    }
-
-    /// Provided for backwards compatibility with the original stub.
-    pub fn new() -> Self {
-        Self {
-            config: ServerWallConfig::default(),
-        }
+    pub fn from_config(config: ServerWallConfig, config_path: std::path::PathBuf) -> Self {
+        Self { config, config_path }
     }
 
     /// Run the server: set up backends, health checkers, and listeners.
@@ -59,6 +54,16 @@ impl Server {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+        // Spawn SIGHUP config reload handler
+        {
+            let reload_handler = ReloadHandler::new(self.config_path.clone());
+            let (config_tx, _config_rx) = tokio::sync::watch::channel(None);
+            let rx = shutdown_rx.clone();
+            tasks.push(tokio::spawn(async move {
+                reload_handler.run(config_tx, rx).await;
+            }));
+        }
 
         // Build backend pools (name -> Vec<Arc<Backend>>)
         let pools = build_backend_pools(&self.config);
@@ -651,7 +656,7 @@ fn build_balancer(method: BalanceMethod) -> Box<dyn LoadBalancer> {
 }
 
 /// Build antispam pipeline from config.
-fn build_antispam_pipeline(config: &serverwall_core::config::schema::AntispamConfig) -> Arc<AntispamPipeline> {
+fn build_antispam_pipeline(_config: &serverwall_core::config::schema::AntispamConfig) -> Arc<AntispamPipeline> {
     Arc::new(AntispamPipeline::empty())
 }
 
@@ -738,6 +743,7 @@ async fn run_smtps_frontend(
                                 client = %peer_addr,
                                 backend_tag = %backend.tag,
                                 mail_from = %result.mail_from,
+                                rcpt_to = %result.rcpt_to.join(", "),
                                 verdict = %result.verdict,
                                 spam_score = result.spam_score,
                                 bytes_in = result.bytes_from_client,
@@ -832,6 +838,7 @@ async fn run_smtp_starttls_frontend(
                                 client = %peer_addr,
                                 backend_tag = %backend.tag,
                                 mail_from = %result.mail_from,
+                                rcpt_to = %result.rcpt_to.join(", "),
                                 verdict = %result.verdict,
                                 spam_score = result.spam_score,
                                 bytes_in = result.bytes_from_client,

@@ -1,5 +1,4 @@
 mod listener;
-mod metrics;
 mod pipeline;
 mod proxy;
 mod reload;
@@ -56,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Create and run the server
-    let server = server::Server::from_config(config);
+    let server = server::Server::from_config(config, args.config);
     server.run().await?;
 
     Ok(())

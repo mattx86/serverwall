@@ -36,11 +36,6 @@ impl TlsListenerTask {
         }
     }
 
-    /// Returns the current number of active connections.
-    pub fn active_connections(&self) -> usize {
-        self.tcp.active_connections()
-    }
-
     /// Bind, accept, perform TLS handshake, and dispatch to the handler.
     ///
     /// For each accepted connection the `handler` closure is invoked with:

@@ -1,0 +1,25 @@
+[package]
+name = "serverwall-waf"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ServerWall WAF engine: OWASP rules, rate limiting, bot detection"
+
+[dependencies]
+serverwall-core = { path = "../serverwall-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+aho-corasick = { workspace = true }
+ip_network = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = { workspace = true }
+maxminddb = { workspace = true }
+bytes = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+http = "1"

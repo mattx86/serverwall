@@ -1,0 +1,202 @@
+# =============================================================================
+# ServerWall Configuration
+# =============================================================================
+
+[global]
+daemon_name = "serverwall"
+# pid_file = "/opt/serverwall/run/serverwall.pid"
+# worker_threads = 0                    # 0 = auto-detect
+max_connections = 65536
+log_dir = "/opt/serverwall/var/log"
+cert_dir = "/opt/serverwall/etc/certs"
+# config_dir = "/opt/serverwall/etc/conf.d"   # Drop-in config fragments
+log_level = "info"
+
+# ---- Web UI / Management API ------------------------------------------------
+
+[webui]
+enabled = true
+listen = "0.0.0.0:8443"
+tls_cert = "/opt/serverwall/etc/certs/webui.pem"
+tls_key = "/opt/serverwall/etc/certs/webui-key.pem"
+tokens_file = "/opt/serverwall/etc/api-tokens.toml"
+web_users_file = "/opt/serverwall/etc/web-users.toml"
+# allowed_origins = ["https://lb.example.com"]
+
+# ---- Let's Encrypt / ACME ---------------------------------------------------
+
+[acme]
+enabled = false
+# email = "admin@example.com"
+# directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+# challenge_type = "http-01"
+# storage_dir = "/opt/serverwall/etc/acme"
+# auto_renew = true
+# renew_before_days = 30
+
+# ---- Frontends ---------------------------------------------------------------
+# Add frontends with: serverwallctl frontend add ...
+# Or via the web UI at https://<host>:8443
+#
+# Example:
+#
+# [[frontend]]
+# name = "https-main"
+# protocol = "https"
+# listen = ["0.0.0.0:443", "[::]:443"]
+# backend_pool = "web-servers"
+# tls_cert = "/opt/serverwall/etc/certs/example.com.pem"
+# tls_key = "/opt/serverwall/etc/certs/example.com-key.pem"
+# tls_min_version = "1.2"
+# balancer = "least_connections"
+# waf_enabled = true
+# waf_ruleset = "owasp-standard"
+# log_file = "https-main.log"
+# log_format = "apache_combined"
+#
+# [frontend.headers]
+# x_forwarded_for = true
+# x_real_ip = true
+# x_forwarded_proto = true
+# x_request_id = true
+
+# ---- Backend Pools -----------------------------------------------------------
+# Add backend pools with: serverwallctl backend add-pool ...
+#
+# Example:
+#
+# [[backend_pool]]
+# name = "web-servers"
+# health_check_interval = "10s"
+# health_check_timeout = "3s"
+# health_check_type = "http"
+# health_check_path = "/healthz"
+# health_check_expect = 200
+#
+# [[backend_pool.backend]]
+# name = "web1"
+# address = "10.0.1.10:8080"
+# weight = 1
+
+# ---- WAF Rulesets ------------------------------------------------------------
+# Add WAF rulesets with: serverwallctl waf add ...
+#
+# Example:
+#
+# [[waf_ruleset]]
+# name = "owasp-standard"
+# mode = "blocking"
+# anomaly_threshold = 5
+# paranoia_level = 1
+
+# ---- Security ----------------------------------------------------------------
+
+[security]
+enabled = true
+
+[security.tls]
+min_version = "1.2"
+ocsp_stapling = true
+hsts_max_age = 31536000
+hsts_include_subdomains = true
+
+[security.headers]
+add_x_content_type_options = true
+add_x_frame_options = "DENY"
+add_referrer_policy = "strict-origin-when-cross-origin"
+remove_server_header = true
+remove_x_powered_by = true
+
+# ---- Antispam ----------------------------------------------------------------
+
+[antispam]
+enabled = true
+possible_spam_threshold = 40
+definite_spam_threshold = 80
+max_check_duration = "10s"
+
+[antispam.dnsbl]
+enabled = true
+weight = 8.0
+timeout = "5s"
+
+[[antispam.dnsbl.lists]]
+zone = "zen.spamhaus.org"
+weight_multiplier = 1.0
+
+[[antispam.dnsbl.lists]]
+zone = "bl.spamcop.net"
+weight_multiplier = 0.8
+
+[antispam.spf]
+enabled = true
+weight = 6.0
+
+[antispam.rdns]
+enabled = true
+weight = 4.0
+
+[antispam.helo]
+enabled = true
+weight = 3.0
+
+[antispam.dkim]
+enabled = true
+weight = 5.0
+
+[antispam.dmarc]
+enabled = true
+weight = 7.0
+honor_reject_policy = true
+
+[antispam.content]
+enabled = true
+weight = 5.0
+# rules_file = "content-rules.toml"
+
+[antispam.url_analysis]
+enabled = true
+weight = 5.0
+surbl_zones = ["multi.surbl.org", "dbl.spamhaus.org"]
+
+[antispam.attachment]
+enabled = true
+weight = 6.0
+
+[antispam.html]
+enabled = true
+weight = 4.0
+
+[antispam.antivirus]
+enabled = false
+weight = 10.0
+reject_on_virus = true
+
+# [[antispam.antivirus.scanners]]
+# name = "clamav"
+# command = "/usr/bin/clamdscan --no-summary --fdpass {file}"
+# clean_exit_codes = [0]
+# virus_exit_codes = [1]
+# error_exit_codes = [2]
+# timeout = "30s"
+# virus_name_pattern = '^.*: (.*) FOUND$'
+
+# ---- SMTP Outbound Relay ----------------------------------------------------
+
+[relay]
+enabled = false
+# listen = ["0.0.0.0:587"]
+# hostname = "mail.example.com"
+# spool_dir = "/opt/serverwall/var/spool"
+
+# [relay.trusted_hosts]
+# hosts = ["10.0.0.0/8", "192.168.0.0/16"]
+
+# [relay.dkim]
+# enabled = true
+#
+# [[relay.dkim.domains]]
+# domain = "example.com"
+# selector = "mail"
+# key_file = "/opt/serverwall/etc/dkim/example.com_mail.pem"
+# algorithm = "rsa-sha256"

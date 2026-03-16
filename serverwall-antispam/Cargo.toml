@@ -1,0 +1,32 @@
+[package]
+name = "serverwall-antispam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ServerWall antispam engine: DNSBL, SPF/DKIM/DMARC, content analysis, antivirus"
+
+[dependencies]
+serverwall-core = { path = "../serverwall-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+ip_network = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = { workspace = true }
+hickory-resolver = { workspace = true }
+mail-auth = { workspace = true }
+mail-parser = { workspace = true }
+redb = { workspace = true }
+lol_html = { workspace = true }
+url = { workspace = true }
+publicsuffix = { workspace = true }
+bytes = { workspace = true }
+memchr = { workspace = true }
+tempfile = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }

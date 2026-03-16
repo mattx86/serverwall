@@ -1,0 +1,36 @@
+[package]
+name = "serverwall-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Core library for ServerWall: config, TLS, balancer, ACL, logging, protocol types"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rustls-pki-types = { workspace = true }
+rustls-native-certs = { workspace = true }
+openssl = { workspace = true }
+instant-acme = { workspace = true }
+ip_network = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = { workspace = true }
+notify = { workspace = true }
+hickory-resolver = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+regex = { workspace = true }
+bytes = { workspace = true }
+async-trait = { workspace = true }
+tempfile = { workspace = true }
+libc = { workspace = true }

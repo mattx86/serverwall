@@ -1,0 +1,49 @@
+# Stage 1: Build release binaries
+FROM rust:1.88-bookworm AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    cmake \
+    perl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+RUN cargo build --release \
+    -p serverwall-proxy \
+    -p serverwall-api \
+    -p serverwall-cli
+
+# Stage 2: Assemble release package
+FROM debian:bookworm-slim AS packager
+
+WORKDIR /package
+
+# Binaries
+COPY --from=builder /app/target/release/serverwall     ./bin/serverwall
+COPY --from=builder /app/target/release/serverwall-api ./bin/serverwall-api
+COPY --from=builder /app/target/release/serverwallctl  ./bin/serverwallctl
+
+# Config example, systemd unit, installer
+COPY config/serverwall.toml         ./config/serverwall.toml.example
+COPY systemd/serverwall.service     ./systemd/serverwall.service
+COPY packaging/install.sh           ./install.sh
+
+# Version metadata (used when naming the archive)
+COPY --from=builder /app/Cargo.toml ./Cargo.toml
+
+RUN chmod +x ./install.sh ./bin/serverwall ./bin/serverwall-api ./bin/serverwallctl
+
+CMD VERSION=$(grep '^version' /package/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/'); \
+    NAME="serverwall-${VERSION}"; \
+    DEST="/tmp/${NAME}"; \
+    mkdir -p "${DEST}/bin" "${DEST}/config" "${DEST}/systemd"; \
+    cp /package/install.sh          "${DEST}/install.sh"; \
+    cp /package/bin/*               "${DEST}/bin/"; \
+    cp /package/config/*            "${DEST}/config/"; \
+    cp /package/systemd/*           "${DEST}/systemd/"; \
+    mkdir -p /dist; \
+    tar -czf "/dist/${NAME}.tar.gz" -C /tmp "${NAME}"; \
+    echo "Created: /dist/${NAME}.tar.gz"

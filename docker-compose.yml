@@ -1,0 +1,73 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    working_dir: /app
+    command: cargo build
+    profiles: ["build"]
+
+  check:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    working_dir: /app
+    command: cargo check
+    profiles: ["check"]
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    working_dir: /app
+    command: cargo test
+    profiles: ["test"]
+
+  clippy:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
+    working_dir: /app
+    command: cargo clippy -- -D warnings
+    profiles: ["clippy"]
+
+  run:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8443:8443"
+    volumes:
+      - serverwall-config:/etc/serverwall
+    command: >
+      sh -c "serverwall --init && serverwall-api --listen 0.0.0.0:8443"
+    profiles: ["run"]
+
+  release:
+    build:
+      context: .
+      dockerfile: Dockerfile.release
+    volumes:
+      - ./dist:/dist
+    profiles: ["release"]
+
+volumes:
+  cargo-cache:
+  target-cache:
+  serverwall-config:

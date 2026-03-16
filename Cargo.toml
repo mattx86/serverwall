@@ -1,0 +1,127 @@
+[workspace]
+resolver = "2"
+members = [
+    "serverwall-core",
+    "serverwall-proxy",
+    "serverwall-webui",
+    "serverwall-cli",
+    "serverwall-waf",
+    "serverwall-antispam",
+    "serverwall-relay",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["ServerWall Contributors"]
+description = "Multi-protocol load balancer with antispam, WAF, and SMTP relay"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "=1.50.0", features = ["full"] }
+
+# Serialization
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+toml = "=0.8.23"
+
+# Error handling
+thiserror = "=2.0.18"
+anyhow = "=1.0.102"
+
+# Logging
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+tracing-appender = "=0.2.4"
+
+# Web framework
+axum = "=0.8.8"
+tower = "=0.5.3"
+tower-http = { version = "=0.6.8", features = ["cors", "compression-gzip", "fs"] }
+
+# HTTP
+hyper = { version = "=1.8.1", features = ["full"] }
+hyper-util = { version = "=0.1.20", features = ["full"] }
+http-body-util = "=0.1.3"
+
+# TLS
+tokio-rustls = "=0.26.4"
+rustls = "=0.23.37"
+rustls-pemfile = "=2.2.0"
+rustls-pki-types = "=1.14.0"
+rustls-native-certs = "=0.8.3"
+openssl = "=0.10.76"
+
+# ACME / Let's Encrypt
+instant-acme = "=0.7.2"
+
+# CLI
+clap = { version = "=4.6.0", features = ["derive"] }
+
+# HTTP client
+reqwest = { version = "=0.12.28", features = ["json", "rustls-tls"], default-features = false }
+
+# Pattern matching
+regex = "=1.12.3"
+aho-corasick = "=1.1.4"
+
+# Security
+argon2 = "=0.5.3"
+jsonwebtoken = "=9.3.1"
+
+# Networking
+ip_network = "=0.4.1"
+
+# Concurrency
+dashmap = "=6.1.0"
+arc-swap = "=1.8.2"
+
+# Filesystem watching
+notify = "=7.0.0"
+
+# Embedded assets
+rust-embed = "=8.11.0"
+
+# DNS
+hickory-resolver = "=0.24.4"
+
+# Mail
+mail-auth = "=0.4.3"
+mail-parser = "=0.9.4"
+
+# GeoIP
+maxminddb = "=0.24.0"
+
+# Time and IDs
+chrono = { version = "=0.4.44", features = ["serde"] }
+uuid = { version = "=1.22.0", features = ["v4", "v5", "serde"] }
+
+# Storage
+redb = "=2.6.3"
+
+# HTML parsing
+lol_html = "=1.2.1"
+
+# URL handling
+url = "=2.5.8"
+publicsuffix = "=2.3.0"
+
+# Bytes
+bytes = "=1.11.1"
+memchr = "=2.8.0"
+
+# Temp files
+tempfile = "=3.27.0"
+
+# Async trait
+async-trait = "=0.1.89"
+
+# Pin
+pin-project-lite = "=0.2.17"
+
+# Futures
+futures = "=0.3.32"
+
+# Unix signal / system calls
+libc = "=0.2.183"

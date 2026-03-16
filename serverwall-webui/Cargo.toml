@@ -1,0 +1,42 @@
+[package]
+name = "serverwall-webui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ServerWall web management UI and HTTPS management server"
+
+[[bin]]
+name = "serverwall-webui"
+path = "src/main.rs"
+
+[dependencies]
+serverwall-core = { path = "../serverwall-core" }
+serverwall-waf = { path = "../serverwall-waf" }
+serverwall-antispam = { path = "../serverwall-antispam" }
+serverwall-relay = { path = "../serverwall-relay" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
+rustls-pki-types = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+argon2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+rust-embed = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = { workspace = true }
+clap = { workspace = true }

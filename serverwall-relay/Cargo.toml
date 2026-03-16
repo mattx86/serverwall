@@ -1,0 +1,35 @@
+[package]
+name = "serverwall-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "ServerWall SMTP outbound relay: trusted relay, DKIM signing, queue, delivery"
+
+[dependencies]
+serverwall-core = { path = "../serverwall-core" }
+serverwall-antispam = { path = "../serverwall-antispam" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+hickory-resolver = { workspace = true }
+mail-auth = { workspace = true }
+mail-parser = { workspace = true }
+ip_network = { workspace = true }
+dashmap = { workspace = true }
+arc-swap = { workspace = true }
+argon2 = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+bytes = { workspace = true }
+tempfile = { workspace = true }
+async-trait = { workspace = true }
+url = { workspace = true }
+regex = { workspace = true }
+rustls-native-certs = { workspace = true }
+futures = { workspace = true }

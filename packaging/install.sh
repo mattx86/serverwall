@@ -64,19 +64,28 @@ install -m 644 "${SCRIPT_DIR}/systemd/serverwall-webui.service" "${SYSTEMD_DIR}/
 echo "[+] Installed systemd unit files"
 
 systemctl daemon-reload
-systemctl enable serverwall serverwall-webui
-echo "[+] Services enabled (serverwall + serverwall-webui)"
 
 # ─── First-run init ───────────────────────────────────────────────────────────
 echo ""
 echo "Running first-time initialisation..."
 "${BIN_DIR}/serverwall" --init
 
+# ─── Enable and start services ────────────────────────────────────────────────
+echo ""
+systemctl enable serverwall serverwall-webui
+echo "[+] Services enabled (serverwall + serverwall-webui)"
+
+systemctl start serverwall
+echo "[+] serverwall started"
+
+systemctl start serverwall-webui
+echo "[+] serverwall-webui started"
+
 # ─── Done ─────────────────────────────────────────────────────────────────────
 echo ""
-echo "ServerWall installed successfully."
+echo "ServerWall installed and running."
 echo ""
-echo "  Start:   systemctl start serverwall"
 echo "  Status:  systemctl status serverwall serverwall-webui"
 echo "  Logs:    journalctl -u serverwall -f"
+echo "  Web UI:  https://$(hostname):8443"
 echo ""

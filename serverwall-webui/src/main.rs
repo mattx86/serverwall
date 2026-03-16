@@ -61,6 +61,32 @@ async fn main() {
     let tls_cert = config.webui.tls_cert.clone();
     let tls_key = config.webui.tls_key.clone();
 
+    // Auto-generate a self-signed cert if the configured paths don't exist yet.
+    // This ensures HTTPS works out of the box even before `serverwall --init` is run.
+    if let (Some(cert_path), Some(key_path)) = (&tls_cert, &tls_key) {
+        if !cert_path.exists() || !key_path.exists() {
+            if let Some(parent) = cert_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let cn = std::fs::read_to_string("/etc/hostname")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "localhost".to_string());
+            match serverwall_core::tls::generate_self_signed_cert(cert_path, key_path, &cn) {
+                Ok(()) => tracing::info!(
+                    cert = %cert_path.display(),
+                    "generated self-signed TLS certificate for web UI",
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    cert = %cert_path.display(),
+                    "failed to generate self-signed TLS certificate",
+                ),
+            }
+        }
+    }
+
     let state = AppState::from_config(config, args.config.clone());
     let app = routes::build_router(state);
 
@@ -71,11 +97,12 @@ async fn main() {
                     serve_https(app, &listen_addr, tls_config).await;
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "failed to load TLS cert/key for webui, falling back to plain HTTP"
+                    eprintln!(
+                        "fatal: failed to load TLS certificate for webui: {}\n\
+                         Refusing to start without TLS. Run `serverwall --init` to generate certs.",
+                        e
                     );
-                    serve_http(app, &listen_addr).await;
+                    std::process::exit(1);
                 }
             }
         }

@@ -1,4 +1,5 @@
 use axum::{
+    extract::Path,
     http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
 };
@@ -21,6 +22,11 @@ pub async fn serve_login() -> Response {
 /// Serve the queue management page.
 pub async fn serve_queue() -> Response {
     serve_embedded_file("queue.html").await
+}
+
+/// Serve any embedded static asset by path (catch-all for /ui/{*path}).
+pub async fn serve_asset(Path(path): Path<String>) -> Response {
+    serve_embedded_file(&path).await
 }
 
 async fn serve_embedded_file(path: &str) -> Response {

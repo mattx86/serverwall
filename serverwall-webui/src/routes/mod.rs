@@ -30,10 +30,13 @@ pub fn build_router(state: AppState) -> Router {
 
     // Public routes (no auth required)
     let public_routes = Router::new()
+        .route("/", get(|| async { axum::response::Redirect::permanent("/ui/login.html") }))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/health", get(health_check))
-        .route("/ui/login.html", get(static_files::serve_login));
+        .route("/ui/login.html", get(static_files::serve_login))
+        // Static assets (CSS, JS, images) served without auth so login page renders correctly
+        .route("/ui/{*path}", get(static_files::serve_asset));
 
     // Protected API routes
     let api_routes = Router::new()
@@ -76,10 +79,6 @@ pub fn build_router(state: AppState) -> Router {
         // WAF
         .route("/api/waf", get(waf::list).post(waf::create))
         .route("/api/waf/{name}", get(waf::get).put(waf::update).delete(waf::delete))
-        // Web UI (protected)
-        .route("/ui/", get(static_files::serve_index))
-        .route("/ui/index.html", get(static_files::serve_index))
-        .route("/ui/queue.html", get(static_files::serve_queue))
         .route_layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::auth,

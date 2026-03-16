@@ -4,125 +4,95 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ServerWall - Mail Queue</title>
+<link rel="stylesheet" href="/ui/app.css">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0}
-nav{background:#16213e;padding:.8rem 1.5rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #333}
-nav h1{color:#0f9;font-size:1.2rem}
-nav a{color:#aaa;text-decoration:none;margin-left:1.5rem;font-size:.9rem}
-nav a:hover{color:#0f9}
-.container{max-width:1400px;margin:1.5rem auto;padding:0 1.5rem}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:.8rem;margin-bottom:1.5rem}
-.card{background:#16213e;border-radius:6px;padding:1rem;border:1px solid #333;text-align:center}
-.card h3{color:#0f9;font-size:.75rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.3rem}
-.card .value{font-size:1.5rem;font-weight:700}
-.toolbar{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:center}
-.toolbar input,.toolbar select{padding:.4rem .6rem;background:#0f3460;color:#e0e0e0;border:1px solid #333;border-radius:4px;font-size:.85rem}
-.toolbar input:focus,.toolbar select:focus{outline:none;border-color:#0f9}
-.btn{padding:.4rem .8rem;border:none;border-radius:4px;cursor:pointer;font-size:.85rem;font-weight:600}
-.btn-primary{background:#0f9;color:#1a1a2e}
-.btn-primary:hover{background:#0d8}
-.btn-danger{background:#c44;color:#fff}
-.btn-danger:hover{background:#a33}
-.btn-warn{background:#e90;color:#1a1a2e}
-.btn-warn:hover{background:#d80}
-.btn-sm{padding:.3rem .5rem;font-size:.8rem}
-table{width:100%;border-collapse:collapse;background:#16213e;border-radius:6px;overflow:hidden}
-th,td{padding:.5rem .7rem;text-align:left;border-bottom:1px solid #222}
-th{background:#0f3460;color:#aaa;font-size:.75rem;text-transform:uppercase;cursor:pointer;user-select:none}
-th:hover{color:#0f9}
-td{font-size:.85rem}
-.status-pending{color:#0f9}
-.status-deferred{color:#fa0}
-.status-held{color:#f66}
-.status-active{color:#09f}
-.pagination{display:flex;gap:.5rem;margin-top:1rem;align-items:center;font-size:.85rem}
-.pagination button{padding:.3rem .6rem;background:#0f3460;color:#e0e0e0;border:1px solid #333;border-radius:4px;cursor:pointer}
-.pagination button:hover{border-color:#0f9}
-.pagination button:disabled{opacity:.4;cursor:not-allowed}
-input[type="checkbox"]{width:16px;height:16px;accent-color:#0f9}
-#msgDetail{display:none;background:#16213e;border:1px solid #333;border-radius:6px;padding:1.2rem;margin-bottom:1rem}
-#msgDetail h3{color:#0f9;margin-bottom:.8rem}
-#msgDetail pre{background:#0f3460;padding:.8rem;border-radius:4px;overflow-x:auto;font-size:.8rem;max-height:400px;overflow-y:auto}
-#msgDetail .close{float:right;cursor:pointer;color:#aaa;font-size:1.2rem}
-#msgDetail .close:hover{color:#f66}
+#msgDetail{display:none;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:1.2rem;margin-bottom:1rem}
+#msgDetail h3{color:var(--accent);margin-bottom:.8rem}
+#msgDetail pre{background:var(--surface2);padding:.8rem;border-radius:4px;overflow-x:auto;font-size:.8rem;max-height:400px;overflow-y:auto}
+#msgDetail .close{float:right;cursor:pointer;color:var(--muted);font-size:1.2rem}
+#msgDetail .close:hover{color:var(--danger)}
+.cards{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
 </style>
 </head>
 <body>
-<nav>
-  <h1>ServerWall</h1>
-  <div>
-    <a href="/ui/">Dashboard</a>
-    <a href="/ui/queue.html">Queue</a>
-  </div>
-</nav>
-<div class="container">
-  <div class="cards" id="qStats">
-    <div class="card"><h3>Total</h3><div class="value" id="qTotal">--</div></div>
-    <div class="card"><h3>Pending</h3><div class="value" id="qPending">--</div></div>
-    <div class="card"><h3>Deferred</h3><div class="value" id="qDeferred">--</div></div>
-    <div class="card"><h3>Held</h3><div class="value" id="qHeld">--</div></div>
-    <div class="card"><h3>Active</h3><div class="value" id="qActive">--</div></div>
-  </div>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <h2 style="margin-bottom:1rem">Mail Queue</h2>
 
-  <div id="msgDetail">
-    <span class="close" onclick="closeDetail()">&times;</span>
-    <h3>Message Detail: <span id="detailId"></span></h3>
-    <pre id="detailContent"></pre>
-    <div style="margin-top:.8rem;display:flex;gap:.5rem">
-      <button class="btn btn-primary btn-sm" onclick="retryMsg(currentDetailId)">Retry</button>
-      <button class="btn btn-warn btn-sm" onclick="holdMsg(currentDetailId)">Hold</button>
-      <button class="btn btn-primary btn-sm" onclick="releaseMsg(currentDetailId)">Release</button>
-      <button class="btn btn-danger btn-sm" onclick="deleteMsg(currentDetailId)">Delete</button>
+    <div class="cards" id="qStats">
+      <div class="card"><h3>Total</h3><div class="value" id="qTotal">--</div></div>
+      <div class="card"><h3>Pending</h3><div class="value" id="qPending">--</div></div>
+      <div class="card"><h3>Deferred</h3><div class="value" id="qDeferred">--</div></div>
+      <div class="card"><h3>Held</h3><div class="value" id="qHeld">--</div></div>
+      <div class="card"><h3>Active</h3><div class="value" id="qActive">--</div></div>
+    </div>
+
+    <div id="msgDetail">
+      <span class="close" onclick="closeDetail()">&times;</span>
+      <h3>Message: <span id="detailId"></span></h3>
+      <pre id="detailContent"></pre>
+      <div style="margin-top:.8rem;display:flex;gap:.5rem">
+        <button class="btn btn-primary btn-sm" onclick="retryMsg(currentDetailId)">Retry</button>
+        <button class="btn btn-warn btn-sm" onclick="holdMsg(currentDetailId)">Hold</button>
+        <button class="btn btn-primary btn-sm" onclick="releaseMsg(currentDetailId)">Release</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteMsg(currentDetailId)">Delete</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" id="filterSender" placeholder="Sender...">
+      <input type="text" id="filterRecipient" placeholder="Recipient...">
+      <select id="filterStatus">
+        <option value="">All Statuses</option>
+        <option value="pending">Pending</option>
+        <option value="deferred">Deferred</option>
+        <option value="held">Held</option>
+        <option value="active">Active</option>
+      </select>
+      <button class="btn btn-primary" onclick="loadQueue()">Filter</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="flushQueue()">Flush All</button>
+      <button class="btn btn-danger" onclick="purgeQueue()">Purge Old</button>
+      <button class="btn btn-warn" onclick="bulkAction('hold')">Hold Sel.</button>
+      <button class="btn btn-primary" onclick="bulkAction('release')">Release Sel.</button>
+      <button class="btn btn-primary" onclick="bulkAction('retry')">Retry Sel.</button>
+      <button class="btn btn-danger" onclick="bulkAction('delete')">Delete Sel.</button>
+    </div>
+
+    <table>
+      <thead><tr>
+        <th><input type="checkbox" id="selectAll" onchange="toggleAll()"></th>
+        <th>ID</th>
+        <th>Sender</th>
+        <th>Recipients</th>
+        <th>Status</th>
+        <th>Size</th>
+        <th>Created</th>
+        <th>Next Retry</th>
+        <th>Actions</th>
+      </tr></thead>
+      <tbody id="qBody"></tbody>
+    </table>
+
+    <div class="pagination">
+      <button id="prevBtn" onclick="prevPage()" disabled>&laquo; Prev</button>
+      <span id="pageInfo">Page 1</span>
+      <button id="nextBtn" onclick="nextPage()">Next &raquo;</button>
     </div>
   </div>
-
-  <div class="toolbar">
-    <input type="text" id="filterSender" placeholder="Sender...">
-    <input type="text" id="filterRecipient" placeholder="Recipient...">
-    <select id="filterStatus"><option value="">All Statuses</option><option value="pending">Pending</option><option value="deferred">Deferred</option><option value="held">Held</option><option value="active">Active</option></select>
-    <button class="btn btn-primary" onclick="loadQueue()">Filter</button>
-    <div style="flex:1"></div>
-    <button class="btn btn-primary" onclick="flushQueue()">Flush All</button>
-    <button class="btn btn-danger" onclick="purgeQueue()">Purge Old</button>
-    <button class="btn btn-warn" onclick="bulkAction('hold')">Hold Selected</button>
-    <button class="btn btn-primary" onclick="bulkAction('release')">Release Selected</button>
-    <button class="btn btn-primary" onclick="bulkAction('retry')">Retry Selected</button>
-    <button class="btn btn-danger" onclick="bulkAction('delete')">Delete Selected</button>
-  </div>
-
-  <table>
-    <thead><tr>
-      <th><input type="checkbox" id="selectAll" onchange="toggleAll()"></th>
-      <th onclick="sortBy('id')">ID</th>
-      <th onclick="sortBy('sender')">Sender</th>
-      <th onclick="sortBy('recipients')">Recipients</th>
-      <th onclick="sortBy('status')">Status</th>
-      <th onclick="sortBy('size')">Size</th>
-      <th onclick="sortBy('created')">Created</th>
-      <th onclick="sortBy('next_retry')">Next Retry</th>
-      <th>Actions</th>
-    </tr></thead>
-    <tbody id="qBody"></tbody>
-  </table>
-
-  <div class="pagination">
-    <button id="prevBtn" onclick="prevPage()" disabled>&laquo; Prev</button>
-    <span id="pageInfo">Page 1</span>
-    <button id="nextBtn" onclick="nextPage()">Next &raquo;</button>
-  </div>
 </div>
+<script src="/ui/app.js"></script>
 <script>
 var currentPage=0,pageSize=50,totalMessages=0,currentDetailId=null,allMessages=[];
-function getCookie(n){var m=document.cookie.match(new RegExp('(^| )'+n+'=([^;]+)'));return m?m[2]:null}
-function authHeaders(){var t=getCookie('lg_session');var h={'Content-Type':'application/json'};if(t)h['Authorization']='Bearer '+t;return h}
-function fmtSize(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB'}
-function fmtDate(d){if(!d)return'--';var dt=new Date(d);return dt.toLocaleString()}
 
 async function loadStats(){
   try{
-    var r=await fetch('/api/queue/stats',{headers:authHeaders()});
-    var d=await r.json();
+    var d=await fetch('/api/queue/stats',{headers:authHeaders()}).then(function(r){return r.json()});
     document.getElementById('qTotal').textContent=d.total||0;
     document.getElementById('qPending').textContent=d.pending||0;
     document.getElementById('qDeferred').textContent=d.deferred||0;
@@ -133,30 +103,22 @@ async function loadStats(){
 
 async function loadQueue(){
   try{
-    var params=new URLSearchParams();
-    params.set('offset',currentPage*pageSize);
-    params.set('limit',pageSize);
-    var s=document.getElementById('filterStatus').value;
-    if(s)params.set('status',s);
-    var se=document.getElementById('filterSender').value;
-    if(se)params.set('sender',se);
-    var re=document.getElementById('filterRecipient').value;
-    if(re)params.set('recipient',re);
-
-    var r=await fetch('/api/queue?'+params.toString(),{headers:authHeaders()});
-    var d=await r.json();
-    allMessages=d.messages||[];
-    totalMessages=d.total||allMessages.length;
-    renderTable();
-    updatePagination();
+    var p=new URLSearchParams();
+    p.set('offset',currentPage*pageSize);p.set('limit',pageSize);
+    var s=document.getElementById('filterStatus').value;if(s)p.set('status',s);
+    var se=document.getElementById('filterSender').value;if(se)p.set('sender',se);
+    var re=document.getElementById('filterRecipient').value;if(re)p.set('recipient',re);
+    var d=await fetch('/api/queue?'+p.toString(),{headers:authHeaders()}).then(function(r){return r.json()});
+    allMessages=d.messages||[];totalMessages=d.total||allMessages.length;
+    renderTable();updatePagination();
   }catch(e){console.error(e)}
 }
 
 function renderTable(){
   var html='';
   allMessages.forEach(function(m){
-    var cls='status-'+(m.status||m.metadata&&m.metadata.status||'pending');
     var status=m.status||m.metadata&&m.metadata.status||'pending';
+    var cls='status-'+status;
     var sender=m.sender||m.envelope&&m.envelope.mail_from||'';
     var rcpts=m.recipients||(m.envelope&&m.envelope.rcpt_to?m.envelope.rcpt_to.join(', '):'');
     var size=m.size||m.metadata&&m.metadata.size||0;
@@ -165,16 +127,13 @@ function renderTable(){
     html+='<tr>';
     html+='<td><input type="checkbox" class="msg-cb" value="'+m.id+'"></td>';
     html+='<td><a href="#" onclick="showDetail(\''+m.id+'\');return false" style="color:#09f">'+m.id+'</a></td>';
-    html+='<td>'+sender+'</td>';
-    html+='<td>'+rcpts+'</td>';
+    html+='<td>'+sender+'</td><td>'+rcpts+'</td>';
     html+='<td class="'+cls+'">'+status+'</td>';
     html+='<td>'+fmtSize(size)+'</td>';
     html+='<td>'+fmtDate(created)+'</td>';
     html+='<td>'+fmtDate(next_retry)+'</td>';
-    html+='<td>';
-    html+='<button class="btn btn-primary btn-sm" onclick="retryMsg(\''+m.id+'\')">Retry</button> ';
-    html+='<button class="btn btn-danger btn-sm" onclick="deleteMsg(\''+m.id+'\')">Del</button>';
-    html+='</td></tr>';
+    html+='<td><button class="btn btn-primary btn-sm" onclick="retryMsg(\''+m.id+'\')">Retry</button> <button class="btn btn-danger btn-sm" onclick="deleteMsg(\''+m.id+'\')">Del</button></td>';
+    html+='</tr>';
   });
   document.getElementById('qBody').innerHTML=html||'<tr><td colspan="9">Queue is empty</td></tr>';
 }
@@ -188,8 +147,6 @@ function updatePagination(){
 function prevPage(){if(currentPage>0){currentPage--;loadQueue()}}
 function nextPage(){currentPage++;loadQueue()}
 function toggleAll(){var c=document.getElementById('selectAll').checked;document.querySelectorAll('.msg-cb').forEach(function(cb){cb.checked=c})}
-function sortBy(field){/* placeholder for client-side sort */}
-
 function getSelected(){return Array.from(document.querySelectorAll('.msg-cb:checked')).map(function(cb){return cb.value})}
 
 async function bulkAction(action){
@@ -207,8 +164,7 @@ async function bulkAction(action){
 async function showDetail(id){
   currentDetailId=id;
   try{
-    var r=await fetch('/api/queue/'+id,{headers:authHeaders()});
-    var d=await r.json();
+    var d=await fetch('/api/queue/'+id,{headers:authHeaders()}).then(function(r){return r.json()});
     document.getElementById('detailId').textContent=id;
     document.getElementById('detailContent').textContent=JSON.stringify(d,null,2);
     document.getElementById('msgDetail').style.display='block';
@@ -223,6 +179,7 @@ async function deleteMsg(id){if(!confirm('Delete message '+id+'?'))return;await 
 async function flushQueue(){if(!confirm('Flush all deferred messages?'))return;await fetch('/api/queue/flush',{method:'POST',headers:authHeaders()});loadQueue();loadStats()}
 async function purgeQueue(){var days=prompt('Purge messages older than how many days?','7');if(!days)return;await fetch('/api/queue/purge?days='+days,{method:'POST',headers:authHeaders()});loadQueue();loadStats()}
 
+initPage('queue');
 loadStats();loadQueue();
 setInterval(function(){loadStats();loadQueue()},30000);
 </script>

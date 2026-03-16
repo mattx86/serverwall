@@ -4,115 +4,46 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ServerWall Dashboard</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#1a1a2e;color:#e0e0e0}
-nav{background:#16213e;padding:.8rem 1.5rem;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #333}
-nav h1{color:#0f9;font-size:1.2rem}
-nav a{color:#aaa;text-decoration:none;margin-left:1.5rem;font-size:.9rem}
-nav a:hover{color:#0f9}
-.container{max-width:1200px;margin:1.5rem auto;padding:0 1.5rem}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem;margin-bottom:2rem}
-.card{background:#16213e;border-radius:6px;padding:1.2rem;border:1px solid #333}
-.card h3{color:#0f9;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}
-.card .value{font-size:1.8rem;font-weight:700}
-.card .sub{font-size:.8rem;color:#888;margin-top:.25rem}
-h2{margin-bottom:1rem;font-size:1.1rem;color:#ccc}
-table{width:100%;border-collapse:collapse;background:#16213e;border-radius:6px;overflow:hidden}
-th,td{padding:.6rem .8rem;text-align:left;border-bottom:1px solid #222}
-th{background:#0f3460;color:#aaa;font-size:.8rem;text-transform:uppercase}
-td{font-size:.9rem}
-.status-healthy{color:#0f9}
-.status-down{color:#f66}
-.status-suspect{color:#fa0}
-.links{margin-top:2rem}
-.links a{display:inline-block;background:#0f3460;color:#e0e0e0;padding:.5rem 1rem;border-radius:4px;text-decoration:none;margin-right:.5rem;font-size:.9rem}
-.links a:hover{background:#0f9;color:#1a1a2e}
-#logout{cursor:pointer;background:none;border:none;color:#aaa;font-size:.9rem}
-#logout:hover{color:#f66}
-</style>
+<link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
-<nav>
-  <h1>ServerWall</h1>
-  <div>
-    <a href="/ui/">Dashboard</a>
-    <a href="/ui/queue.html">Queue</a>
-    <button id="logout">Logout</button>
-  </div>
-</nav>
-<div class="container">
-  <div class="cards" id="statusCards">
-    <div class="card"><h3>Status</h3><div class="value" id="sysStatus">--</div></div>
-    <div class="card"><h3>Uptime</h3><div class="value" id="uptime">--</div></div>
-    <div class="card"><h3>Frontends</h3><div class="value" id="feCount">--</div></div>
-    <div class="card"><h3>Backend Pools</h3><div class="value" id="beCount">--</div></div>
-    <div class="card"><h3>Active Connections</h3><div class="value" id="connCount">--</div></div>
-    <div class="card"><h3>Queue Size</h3><div class="value" id="queueSize">--</div></div>
-  </div>
-
-  <h2>Frontends</h2>
-  <table id="feTable">
-    <thead><tr><th>Name</th><th>Protocol</th><th>Listen</th><th>Backend Pool</th><th>Balancer</th></tr></thead>
-    <tbody id="feBody"></tbody>
-  </table>
-
-  <h2 style="margin-top:1.5rem">Backend Pools</h2>
-  <table id="beTable">
-    <thead><tr><th>Pool</th><th>Backend</th><th>Address</th><th>Status</th><th>Connections</th></tr></thead>
-    <tbody id="beBody"></tbody>
-  </table>
-
-  <div class="links">
-    <a href="/ui/queue.html">Mail Queue</a>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <h2>Dashboard</h2>
+    <div class="cards" id="statusCards">
+      <div class="card"><h3>Status</h3><div class="value" id="sysStatus">--</div></div>
+      <div class="card"><h3>Uptime</h3><div class="value" id="uptime">--</div></div>
+      <div class="card"><h3>Frontends</h3><div class="value" id="feCount">--</div></div>
+      <div class="card"><h3>Backend Pools</h3><div class="value" id="beCount">--</div></div>
+      <div class="card"><h3>Active Connections</h3><div class="value" id="connCount">--</div></div>
+      <div class="card" id="cardQueue" style="display:none"><h3>Mail Queue</h3><div class="value" id="queueSize">--</div></div>
+    </div>
   </div>
 </div>
+<script src="/ui/app.js"></script>
 <script>
-function getCookie(n){var m=document.cookie.match(new RegExp('(^| )'+n+'=([^;]+)'));return m?m[2]:null}
-function authHeaders(){var t=getCookie('lg_session');var h={'Content-Type':'application/json'};if(t)h['Authorization']='Bearer '+t;return h}
-function fmtUptime(s){if(!s&&s!==0)return'--';var d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);return(d?d+'d ':'')+(h?h+'h ':'')+(m+'m')}
-
-async function load(){
-  try{
-    var h=authHeaders();
-    var [st,fe,be]=await Promise.all([
-      fetch('/api/status',{headers:h}).then(r=>r.json()),
-      fetch('/api/frontends',{headers:h}).then(r=>r.json()),
-      fetch('/api/backends',{headers:h}).then(r=>r.json())
-    ]);
-    document.getElementById('sysStatus').textContent=st.status||'ok';
-    document.getElementById('uptime').textContent=fmtUptime(st.uptime_seconds);
-    document.getElementById('feCount').textContent=st.frontend_count||0;
-    document.getElementById('beCount').textContent=st.backend_pool_count||0;
-    document.getElementById('connCount').textContent=st.active_connections||0;
-    document.getElementById('queueSize').textContent=st.queue_total||0;
-
-    var fb='';
-    (fe.frontends||[]).forEach(function(f){
-      fb+='<tr><td>'+f.name+'</td><td>'+f.protocol+'</td><td>'+(f.listen||[]).join(', ')+'</td><td>'+f.backend_pool+'</td><td>'+f.balancer+'</td></tr>';
-    });
-    document.getElementById('feBody').innerHTML=fb||'<tr><td colspan="5">No frontends configured</td></tr>';
-
-    var bb='';
-    (be.pools||[]).forEach(function(p){
-      (p.backends||[]).forEach(function(b){
-        var cls=b.healthy?'status-healthy':'status-down';
-        bb+='<tr><td>'+p.name+'</td><td>'+b.name+'</td><td>'+b.address+'</td><td class="'+cls+'">'+(b.healthy?'healthy':'down')+'</td><td>'+(b.active_connections||0)+'</td></tr>';
-      });
-    });
-    document.getElementById('beBody').innerHTML=bb||'<tr><td colspan="5">No backends configured</td></tr>';
-  }catch(e){
-    console.error('Dashboard load error',e);
+async function loadDashboard() {
+  try {
+    var st = await fetch('/api/status', {headers: authHeaders()}).then(function(r){return r.json()});
+    document.getElementById('sysStatus').textContent  = st.status || 'ok';
+    document.getElementById('uptime').textContent     = fmtUptime(st.uptime_seconds);
+    document.getElementById('feCount').textContent    = st.frontend_count || 0;
+    document.getElementById('beCount').textContent    = st.backend_pool_count || 0;
+    document.getElementById('connCount').textContent  = st.active_connections || 0;
+    document.getElementById('queueSize').textContent  = st.queue_total || 0;
+  } catch(e) {
+    console.error('Dashboard load error', e);
   }
 }
 
-document.getElementById('logout').addEventListener('click',function(){
-  document.cookie='lg_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-  window.location.href='/ui/login.html';
-});
-
-load();
-setInterval(load,15000);
+initPage('dashboard');
+loadDashboard();
+setInterval(loadDashboard, 15000);
 </script>
 </body>
 </html>

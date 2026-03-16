@@ -46,7 +46,7 @@ document.getElementById('loginForm').addEventListener('submit', async function(e
     var data = await res.json();
     if (res.ok && data.token) {
       document.cookie = 'lg_session=' + data.token + '; path=/; SameSite=Strict';
-      window.location.href = '/ui/';
+      window.location.href = '/ui/index.html';
     } else {
       errEl.textContent = data.error || 'Login failed';
       errEl.style.display = 'block';

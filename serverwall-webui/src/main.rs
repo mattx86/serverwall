@@ -1,20 +1,19 @@
 mod state;
 mod middleware;
 mod static_files;
+mod tls;
 mod routes;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use rustls::ServerConfig;
-use rustls_pemfile::{certs, private_key};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer};
+use tokio::sync::RwLock;
 use tokio_rustls::TlsAcceptor;
 use tower::Service;
 use tracing_subscriber::EnvFilter;
 
-use serverwall_core::config::load_config;
+use serverwall_core::config::{editor, load_config, schema::{WafExclusions, WafMode, WafRulesetConfig}};
 use serverwall_core::DEFAULT_CONFIG_PATH;
 use state::AppState;
 
@@ -57,6 +56,17 @@ async fn main() {
         }
     };
 
+    // Ensure "default" WAF ruleset exists (idempotent — add_waf_ruleset returns Err if already there)
+    let _ = editor::add_waf_ruleset(&args.config, WafRulesetConfig {
+        name: "default".to_string(),
+        mode: WafMode::Blocking,
+        anomaly_threshold: 5,
+        paranoia_level: 1,
+        rules_dir: None,
+        exclusions: WafExclusions::default(),
+        custom_rules: vec![],
+    });
+
     if !config.webui.enabled {
         tracing::info!("webui disabled in config (webui.enabled = false), exiting");
         return;
@@ -78,7 +88,15 @@ async fn main() {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "localhost".to_string());
-            match serverwall_core::tls::generate_self_signed_cert(cert_path, key_path, &cn) {
+            let extra_ips: Vec<std::net::IpAddr> = if_addrs::get_if_addrs()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|iface| {
+                    let ip = iface.addr.ip();
+                    if ip.is_loopback() { None } else { Some(ip) }
+                })
+                .collect();
+            match serverwall_core::tls::generate_self_signed_cert(cert_path, key_path, &cn, &extra_ips) {
                 Ok(()) => tracing::info!(
                     cert = %cert_path.display(),
                     "generated self-signed TLS certificate for web UI",
@@ -92,14 +110,16 @@ async fn main() {
         }
     }
 
-    let state = AppState::from_config(config, args.config.clone());
-    let app = routes::build_router(state);
-
     match (&tls_cert, &tls_key) {
         (Some(cert_path), Some(key_path)) => {
-            match load_rustls_config(cert_path, key_path) {
+            match tls::load_tls_config(cert_path, key_path) {
                 Ok(tls_config) => {
-                    serve_https(app, &listen_addr, tls_config).await;
+                    let tls_lock = Arc::new(RwLock::new(
+                        TlsAcceptor::from(Arc::new(tls_config))
+                    ));
+                    let state = AppState::from_config(config, args.config.clone(), Some(tls_lock.clone()));
+                    let app = routes::build_router(state);
+                    serve_https(app, &listen_addr, tls_lock).await;
                 }
                 Err(e) => {
                     eprintln!(
@@ -117,41 +137,14 @@ async fn main() {
                  Configure webui.tls_cert and webui.tls_key for HTTPS.",
                 listen_addr
             );
+            let state = AppState::from_config(config, args.config.clone(), None);
+            let app = routes::build_router(state);
             serve_http(app, &listen_addr).await;
         }
     }
 }
 
-fn load_rustls_config(
-    cert_path: &std::path::Path,
-    key_path: &std::path::Path,
-) -> anyhow::Result<ServerConfig> {
-    let cert_file = std::fs::File::open(cert_path)
-        .map_err(|e| anyhow::anyhow!("failed to open cert {}: {}", cert_path.display(), e))?;
-    let key_file = std::fs::File::open(key_path)
-        .map_err(|e| anyhow::anyhow!("failed to open key {}: {}", key_path.display(), e))?;
-
-    let mut cert_reader = std::io::BufReader::new(cert_file);
-    let mut key_reader = std::io::BufReader::new(key_file);
-
-    let cert_chain: Vec<CertificateDer<'static>> = certs(&mut cert_reader)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!("failed to parse cert: {}", e))?;
-
-    let key: PrivateKeyDer<'static> = private_key(&mut key_reader)
-        .map_err(|e| anyhow::anyhow!("failed to parse private key: {}", e))?
-        .ok_or_else(|| anyhow::anyhow!("no private key found in {}", key_path.display()))?;
-
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
-        .map_err(|e| anyhow::anyhow!("TLS config error: {}", e))?;
-
-    Ok(config)
-}
-
-async fn serve_https(app: axum::Router, addr: &str, tls_config: ServerConfig) {
-    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+async fn serve_https(app: axum::Router, addr: &str, tls_lock: Arc<RwLock<TlsAcceptor>>) {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .unwrap_or_else(|e| {
@@ -171,7 +164,8 @@ async fn serve_https(app: axum::Router, addr: &str, tls_config: ServerConfig) {
             }
         };
 
-        let acceptor = acceptor.clone();
+        // Read current acceptor (cheap clone of Arc-backed TlsAcceptor)
+        let acceptor = tls_lock.read().await.clone();
         let app = app.clone();
 
         tokio::spawn(async move {

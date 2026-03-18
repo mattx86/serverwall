@@ -1,0 +1,22 @@
+services:
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./test/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+  serverwall:
+    build:
+      context: .
+      dockerfile: Dockerfile.run   # copies from serverwall-release, no recompile
+    depends_on:
+      - nginx
+    ports:
+      - "80:80"       # ServerWall frontend (proxy to nginx)
+      - "8443:8443"   # ServerWall WebUI
+    volumes:
+      - serverwall-test-data:/opt/serverwall
+    environment:
+      - RUST_LOG=info
+
+volumes:
+  serverwall-test-data:

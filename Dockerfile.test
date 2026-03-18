@@ -1,0 +1,74 @@
+# ServerWall test environment image.
+# Builds debug binaries and runs both serverwall and serverwall-webui
+# together via a supervisor script.
+
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    curl \
+    pkg-config \
+    libssl-dev \
+    cmake \
+    perl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain 1.88.0 --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /app
+
+COPY Cargo.toml Cargo.lock ./
+COPY serverwall-core/Cargo.toml       serverwall-core/
+COPY serverwall-proxy/Cargo.toml      serverwall-proxy/
+COPY serverwall-webui/Cargo.toml      serverwall-webui/
+COPY serverwall-cli/Cargo.toml        serverwall-cli/
+COPY serverwall-waf/Cargo.toml        serverwall-waf/
+COPY serverwall-antispam/Cargo.toml   serverwall-antispam/
+COPY serverwall-relay/Cargo.toml      serverwall-relay/
+
+RUN mkdir -p serverwall-core/src      && echo "pub fn _dummy() {}" > serverwall-core/src/lib.rs \
+    && mkdir -p serverwall-proxy/src  && echo "fn main() {}" > serverwall-proxy/src/main.rs \
+    && mkdir -p serverwall-webui/src  && echo "fn main() {}" > serverwall-webui/src/main.rs \
+    && mkdir -p serverwall-cli/src    && echo "fn main() {}" > serverwall-cli/src/main.rs \
+    && mkdir -p serverwall-waf/src    && echo "pub fn _dummy() {}" > serverwall-waf/src/lib.rs \
+    && mkdir -p serverwall-antispam/src && echo "pub fn _dummy() {}" > serverwall-antispam/src/lib.rs \
+    && mkdir -p serverwall-relay/src  && echo "pub fn _dummy() {}" > serverwall-relay/src/lib.rs
+
+RUN cargo build 2>/dev/null || true
+
+COPY . .
+RUN find . -name "*.rs" -exec touch {} +
+RUN cargo build
+
+# Runtime image
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r serverwall && useradd -r -g serverwall -s /usr/sbin/nologin serverwall \
+    && mkdir -p /opt/serverwall/bin \
+    && mkdir -p /opt/serverwall/etc/{certs,dkim,acme} \
+    && mkdir -p /opt/serverwall/var/{log,lib,spool} \
+    && mkdir -p /opt/serverwall/run \
+    && chown -R serverwall:serverwall /opt/serverwall
+
+COPY --from=builder /app/target/debug/serverwall        /opt/serverwall/bin/serverwall
+COPY --from=builder /app/target/debug/serverwall-webui  /opt/serverwall/bin/serverwall-webui
+COPY --from=builder /app/target/debug/serverwallctl     /opt/serverwall/bin/serverwallctl
+
+# Startup script: init on first run, then launch both daemons
+COPY test/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 80 443 8443
+
+ENTRYPOINT ["/entrypoint.sh"]

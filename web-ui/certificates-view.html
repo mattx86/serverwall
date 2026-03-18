@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - View Certificate</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.cert-table td:first-child{width:9rem;color:var(--muted);font-size:.82rem;white-space:nowrap;vertical-align:top;padding-top:.35rem}
+.chain-entry{padding:.5rem .7rem;border-left:2px solid var(--border);margin-left:1rem;margin-bottom:.35rem;background:rgba(255,255,255,.03);border-radius:0 4px 4px 0;font-size:.85rem}
+.chain-entry.chain-leaf{border-left-color:var(--accent)}
+.chain-entry.chain-root{border-left-color:var(--muted)}
+.chain-cn{font-weight:600;font-size:.88rem}
+.chain-meta{color:var(--muted);font-size:.77rem;margin-top:.18rem;line-height:1.6}
+.chain-meta code{font-size:.74rem;color:var(--text)}
+.chain-connector{color:var(--muted);font-size:.75rem;margin-bottom:.1rem}
+.badge-blue{background:rgba(100,149,237,.18);color:#89b4fa}
+.section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.5rem}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar" style="margin-bottom:1rem">
+      <h2 style="margin:0;flex:1">Certificate: <span id="certName" style="color:var(--muted);font-weight:400"></span></h2>
+      <a href="/ui/certificates.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
+    </div>
+
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <!-- Single panel: chain at top, details below -->
+    <div id="contentPanel" class="form-panel" style="display:none">
+
+      <!-- Certificate Chain (top) -->
+      <div id="chainSection" style="display:none;margin-bottom:1.2rem">
+        <div class="section-label">Certificate Chain</div>
+        <div id="chainBody"></div>
+      </div>
+
+      <hr id="chainDivider" style="display:none;border:none;border-top:1px solid var(--border);margin-bottom:1rem">
+
+      <!-- Details -->
+      <div class="section-label">Certificate Details</div>
+      <table style="background:transparent;margin-bottom:0" class="cert-table">
+        <tbody id="detailBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+function getCertName() {
+  var params = new URLSearchParams(window.location.search);
+  return params.get('name') || '';
+}
+
+async function loadCert() {
+  var name = getCertName();
+  if (!name) {
+    document.getElementById('loadError').textContent = 'No certificate name specified.';
+    document.getElementById('loadError').style.display = '';
+    return;
+  }
+  document.getElementById('certName').textContent = name;
+  document.title = 'ServerWall - ' + name;
+
+  try {
+    var r = await fetch('/api/certs/' + encodeURIComponent(name), {headers: authHeaders()});
+    var d = await r.json();
+    if (!r.ok) {
+      document.getElementById('loadError').textContent = d.error || 'Failed to load certificate';
+      document.getElementById('loadError').style.display = '';
+      return;
+    }
+    renderChain(d.chain || []);
+    renderDetails(d);
+    document.getElementById('contentPanel').style.display = '';
+  } catch(e) {
+    document.getElementById('loadError').textContent = 'Request failed: ' + e.message;
+    document.getElementById('loadError').style.display = '';
+  }
+}
+
+function renderChain(chain) {
+  if (!chain || chain.length === 0) return;
+
+  // chain[0]=leaf, chain[n-1]=root — reverse for tree display (root at top)
+  var reversed = chain.slice().reverse();
+  var html = '';
+
+  reversed.forEach(function(c, i) {
+    var isLeaf = (i === reversed.length - 1);
+    var isRoot = (i === 0);
+    var entryClass = 'chain-entry' + (isLeaf ? ' chain-leaf' : isRoot ? ' chain-root' : '');
+    var indent = i * 20;
+
+    var badge = (isRoot && c.self_signed)
+      ? '<span class="badge badge-gray" style="font-size:.7rem">root &middot; self-signed</span>'
+      : isLeaf
+        ? '<span class="badge badge-blue" style="font-size:.7rem">leaf</span>'
+        : '<span class="badge badge-gray" style="font-size:.7rem">intermediate</span>';
+
+    if (i > 0) {
+      html += '<div class="chain-connector" style="margin-left:'+(indent-8)+'px">&#x2514;&#x2500;</div>';
+    }
+
+    html += '<div class="'+entryClass+'" style="margin-left:'+indent+'px">';
+    html += '<div class="chain-cn">'+esc(c.subject_cn || '--')+' '+badge+'</div>';
+    html += '<div class="chain-meta">';
+    html += 'Issued by: <strong>'+esc(c.issuer_cn || '--')+'</strong><br>';
+    html += 'Valid: '+esc(c.not_before)+' &ndash; '+esc(c.not_after)+'<br>';
+    if (c.serial) html += 'Serial: <code>'+esc(c.serial)+'</code><br>';
+    if (c.sha256) html += 'SHA-256: <code>'+esc(c.sha256)+'</code>';
+    html += '</div></div>';
+  });
+
+  document.getElementById('chainBody').innerHTML = html;
+  document.getElementById('chainSection').style.display = '';
+  document.getElementById('chainDivider').style.display = '';
+}
+
+function renderDetails(d) {
+  var selfTag = d.self_signed ? ' <span class="badge badge-gray" style="font-size:.7rem">self-signed</span>' : '';
+  var keyTag  = d.key_exists
+    ? '<span class="badge badge-green">present</span>'
+    : '<span class="badge badge-red">missing</span>';
+  var sanHtml = (d.sans && d.sans.length)
+    ? d.sans.map(function(s){return '<code>'+esc(s)+'</code>';}).join('<br>')
+    : '--';
+
+  var rows = [
+    ['Common Name', esc(d.cn || '--') + selfTag],
+    ['Issuer',      esc(d.issuer_cn || '--')],
+    ['Serial',      '<code style="word-break:break-all">'+esc(d.serial || '--')+'</code>'],
+    ['Valid From',  esc(d.not_before || '--')],
+    ['Expires',     esc(d.not_after  || '--')],
+    ['SANs',        sanHtml],
+    ['SHA-1',       '<code style="font-size:.74rem;word-break:break-all">'+esc(d.sha1   || '--')+'</code>'],
+    ['SHA-256',     '<code style="font-size:.74rem;word-break:break-all">'+esc(d.sha256 || '--')+'</code>'],
+    ['Private Key', keyTag],
+    ['Cert File',   '<code style="font-size:.78rem;word-break:break-all">'+esc(d.cert_file || '--')+'</code>'],
+    ['Key File',    '<code style="font-size:.78rem;word-break:break-all">'+esc(d.key_file  || '--')+'</code>'],
+  ];
+
+  document.getElementById('detailBody').innerHTML = rows.map(function(row){
+    return '<tr><td>'+row[0]+'</td><td>'+row[1]+'</td></tr>';
+  }).join('');
+}
+
+initPage('certs');
+loadCert();
+</script>
+</body>
+</html>

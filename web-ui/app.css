@@ -99,3 +99,15 @@ input[type=checkbox]{accent-color:var(--accent)}
 .badge-green{background:rgba(0,255,153,.15);color:var(--accent)}
 .badge-red{background:rgba(204,68,68,.2);color:#ff8888}
 .badge-gray{background:rgba(255,255,255,.08);color:var(--muted)}
+.empty-state{text-align:center;color:var(--muted);font-style:italic;padding:1.2rem}
+#sidebar a.nav-child{padding-left:2.4rem;font-size:.85rem}
+
+/* ── Action dropdown ── */
+.action-menu{position:relative;display:inline-block}
+.action-menu .drop{position:fixed;z-index:200;min-width:170px;background:var(--surface);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 14px rgba(0,0,0,.35);display:none}
+.action-menu.open .drop{display:block}
+.action-menu .drop a{display:block;padding:.38rem .8rem;font-size:.84rem;color:var(--text);cursor:pointer;white-space:nowrap;text-decoration:none}
+.action-menu .drop a:hover{background:rgba(255,255,255,.06)}
+.action-menu .drop a.act-danger{color:var(--danger)}
+.action-menu .drop a.act-disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+.action-menu .drop .drop-sep{border-top:1px solid var(--border);margin:.25rem 0}

@@ -3,11 +3,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arc_swap::ArcSwap;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
+use tokio_rustls::TlsAcceptor;
 
 use serverwall_core::config::ServerWallConfig;
 use serverwall_relay::queue::FilesystemSpool;
 use serverwall_relay::status::QueueStats;
+use serverwall_waf::{RequestLimits, WafEngine};
 
 /// Shared application state available to all route handlers.
 #[derive(Clone)]
@@ -19,16 +21,34 @@ pub struct AppState {
     pub queue_stats: Arc<Mutex<QueueStats>>,
     pub started_at: Instant,
     pub jwt_secret: String,
+    /// Live TLS acceptor; wrapped in RwLock so it can be hot-swapped via the API.
+    pub tls_acceptor: Option<Arc<RwLock<TlsAcceptor>>>,
+    /// WAF engine initialized from the "default" ruleset (or built-in defaults).
+    pub waf_engine: Arc<WafEngine>,
 }
 
 impl AppState {
-    pub fn from_config(config: ServerWallConfig, config_path: PathBuf) -> Self {
+    pub fn from_config(
+        config: ServerWallConfig,
+        config_path: PathBuf,
+        tls_acceptor: Option<Arc<RwLock<TlsAcceptor>>>,
+    ) -> Self {
         let spool_dir = config.relay.spool_dir.clone();
         let spool = FilesystemSpool::new(spool_dir)
             .unwrap_or_else(|_| {
                 FilesystemSpool::new(PathBuf::from("/tmp/serverwall-spool"))
                     .expect("failed to create fallback spool directory")
             });
+
+        // Build WAF engine from the "default" ruleset in config, or use built-in defaults.
+        let waf_engine = {
+            let ruleset = config.waf_ruleset.iter().find(|r| r.name == "default");
+            let (mode, threshold, paranoia) = match ruleset {
+                Some(r) => (waf_mode_convert(r.mode), r.anomaly_threshold, r.paranoia_level),
+                None    => (serverwall_waf::WafMode::Blocking, 5, 1),
+            };
+            Arc::new(WafEngine::with_config(mode, threshold, paranoia, RequestLimits::default()))
+        };
 
         Self {
             config: Arc::new(ArcSwap::from_pointee(config)),
@@ -37,18 +57,32 @@ impl AppState {
             queue_stats: Arc::new(Mutex::new(QueueStats::default())),
             started_at: Instant::now(),
             jwt_secret: generate_jwt_secret(),
+            tls_acceptor,
+            waf_engine,
         }
     }
 
     /// Re-read the config file from disk and update the in-memory ArcSwap.
+    ///
+    /// Uses `load_config_from_str` (parse only, no validation) so that pre-existing
+    /// cross-section issues — e.g. a frontend without a TLS cert that the proxy
+    /// owns — never block unrelated webui writes.  Full validation is run *before*
+    /// each write instead.
     pub fn reload_config(&self) {
-        match serverwall_core::config::load_config(&self.config_path) {
+        let raw = match std::fs::read_to_string(&self.config_path) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "webui: failed to read config from disk");
+                return;
+            }
+        };
+        match serverwall_core::config::load_config_from_str(&raw) {
             Ok(cfg) => {
                 self.config.store(Arc::new(cfg));
                 tracing::info!("webui: in-memory config reloaded from disk");
             }
             Err(e) => {
-                tracing::warn!(error = %e, "webui: failed to reload config from disk");
+                tracing::warn!(error = %e, "webui: failed to parse config from disk");
             }
         }
     }
@@ -79,4 +113,15 @@ impl AppState {
 
 fn generate_jwt_secret() -> String {
     uuid::Uuid::new_v4().to_string() + &uuid::Uuid::new_v4().to_string()
+}
+
+/// Convert config-schema WafMode to the serverwall-waf engine WafMode.
+fn waf_mode_convert(m: serverwall_core::config::schema::WafMode) -> serverwall_waf::WafMode {
+    use serverwall_core::config::schema::WafMode as C;
+    use serverwall_waf::WafMode as E;
+    match m {
+        C::Blocking      => E::Blocking,
+        C::DetectionOnly => E::DetectionOnly,
+        C::Disabled      => E::Disabled,
+    }
 }

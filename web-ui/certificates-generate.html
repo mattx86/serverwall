@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Generate Certificate</title>
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar" style="margin-bottom:1rem">
+      <h2 style="margin:0;flex:1">Generate Self-Signed Certificate</h2>
+      <a href="/ui/certificates.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
+    </div>
+    <div class="form-panel">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Name * (e.g. mysite)</label>
+          <input type="text" id="ssName" placeholder="mysite">
+        </div>
+        <div class="form-group">
+          <label>Common Name / Primary Domain *</label>
+          <input type="text" id="ssCn" placeholder="mysite.example.com">
+        </div>
+        <div class="form-group">
+          <label>Extra SANs (comma-separated IPs/domains)</label>
+          <input type="text" id="ssSans" placeholder="192.168.1.10, 10.0.0.5">
+        </div>
+      </div>
+      <div id="ssError" class="form-error" style="display:none"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="generateSelfSigned()">Generate</button>
+        <button class="btn btn-secondary" onclick="regenerateWebUI()" title="Regenerate the WebUI certificate with all server IPs">Regenerate WebUI Cert</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+async function generateSelfSigned() {
+  var name    = document.getElementById('ssName').value.trim();
+  var cn      = document.getElementById('ssCn').value.trim();
+  var sansRaw = document.getElementById('ssSans').value.trim();
+  var errEl   = document.getElementById('ssError');
+  if (!name || !cn) {
+    errEl.textContent = 'Name and Common Name are required.';
+    errEl.style.display = '';
+    return;
+  }
+  var sans = sansRaw ? sansRaw.split(',').map(function(s){return s.trim()}).filter(Boolean) : [];
+  try {
+    var r = await fetch('/api/certs/self-signed', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({name: name, cn: cn, sans: sans}),
+    });
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Generation failed'; errEl.style.display = ''; return; }
+    alert('Self-signed certificate generated: ' + (res.cert || name));
+    window.location.href = '/ui/certificates.html';
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+async function regenerateWebUI() {
+  if (!confirm('Regenerate the WebUI certificate (webui) with all server IPs?\nThe web UI will need to restart to use the new cert.')) return;
+  var errEl = document.getElementById('ssError');
+  try {
+    var r = await fetch('/api/certs/self-signed', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({name: 'webui', cn: window.location.hostname, sans: []}),
+    });
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Regeneration failed'; errEl.style.display = ''; return; }
+    alert('WebUI certificate regenerated. Restart serverwall-webui to apply.');
+    window.location.href = '/ui/certificates.html';
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+initPage('certs-generate');
+</script>
+</body>
+</html>

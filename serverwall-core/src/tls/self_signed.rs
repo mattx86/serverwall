@@ -5,10 +5,14 @@ use std::path::Path;
 /// Writes a 2048-bit RSA certificate valid for 10 years to `cert_path`
 /// and the corresponding PKCS#8 private key to `key_path`.
 /// The key file is set to mode 0600 on Unix.
+///
+/// `extra_ips` are additional IP addresses to include in the SAN extension
+/// (e.g. all server interface IPs so the cert is valid for direct IP access).
 pub fn generate_self_signed_cert(
     cert_path: &Path,
     key_path: &Path,
     cn: &str,
+    extra_ips: &[std::net::IpAddr],
 ) -> anyhow::Result<()> {
     use openssl::asn1::Asn1Time;
     use openssl::bn::{BigNum, MsbOption};
@@ -44,11 +48,14 @@ pub fn generate_self_signed_cert(
     let basic_constraints = BasicConstraints::new().critical().ca().build()?;
     builder.append_extension(basic_constraints)?;
 
-    let san = SubjectAlternativeName::new()
-        .dns(cn)
-        .dns("localhost")
-        .ip("127.0.0.1")
-        .build(&builder.x509v3_context(None, None))?;
+    let mut san_builder = SubjectAlternativeName::new();
+    san_builder.dns(cn);
+    san_builder.dns("localhost");
+    san_builder.ip("127.0.0.1");
+    for ip in extra_ips {
+        san_builder.ip(&ip.to_string());
+    }
+    let san = san_builder.build(&builder.x509v3_context(None, None))?;
     builder.append_extension(san)?;
 
     builder.sign(&pkey, MessageDigest::sha256())?;

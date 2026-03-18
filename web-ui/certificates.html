@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Certificates</title>
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <h2 style="margin-bottom:1rem">Certificates</h2>
+
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Cert File</th><th>Key</th><th>Expiry</th><th>In Use By</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="certBody">
+        <tr><td colspan="6">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+async function loadCerts() {
+  try {
+    var r = await fetch('/api/certs', {headers: authHeaders()});
+    var d = await r.json();
+    var rows = '';
+    (d.certificates || []).forEach(function(c) {
+      var inUse = (c.in_use_by || []).join(', ') || '<span class="badge badge-gray">none</span>';
+      var expiry = c.expiry || '--';
+      var keyOk = c.key_exists ? '<span class="badge badge-green">yes</span>' : '<span class="badge badge-red">missing</span>';
+      var amId = 'am-' + c.name.replace(/[^a-zA-Z0-9_-]/g,'_');
+      var inUseParts = c.in_use_by || [];
+      var delDisabled = inUseParts.length > 0;
+      var delTip = delDisabled ? 'Remove from frontend(s) first: ' + inUseParts.join(', ') : '';
+      rows += '<tr>';
+      rows += '<td><strong>'+esc(c.name)+'</strong></td>';
+      rows += '<td style="font-size:.82rem">'+esc(c.cert_file)+'</td>';
+      rows += '<td>'+keyOk+'</td>';
+      rows += '<td style="font-size:.82rem">'+esc(expiry)+'</td>';
+      rows += '<td style="font-size:.82rem">'+inUse+'</td>';
+      rows += '<td><div class="action-menu" id="'+esc(amId)+'">';
+      rows += '<button class="btn btn-secondary btn-sm" onclick="toggleAm(\''+esc(amId)+'\')">Actions &#9662;</button>';
+      rows += '<div class="drop">';
+      rows += '<a onclick="viewCert(\''+esc(c.name)+'\');closeAm()">View</a>';
+      rows += '<a onclick="setWebuiCert(\''+esc(c.name)+'\');closeAm()">Use as WebUI Cert</a>';
+      rows += '<div class="drop-sep"></div>';
+      if (delDisabled) {
+        rows += '<a class="act-danger act-disabled" title="'+esc(delTip)+'">Delete</a>';
+      } else {
+        rows += '<a class="act-danger" onclick="deleteCert(\''+esc(c.name)+'\');closeAm()">Delete</a>';
+      }
+      rows += '</div></div></td>';
+      rows += '</tr>';
+    });
+    document.getElementById('certBody').innerHTML = rows || '<tr><td colspan="6" class="empty-state">No certificates installed</td></tr>';
+  } catch(e) {
+    document.getElementById('certBody').innerHTML = '<tr><td colspan="6">Error loading certificates</td></tr>';
+  }
+}
+
+function toggleAm(id) {
+  document.querySelectorAll('.action-menu.open').forEach(function(el) { if (el.id !== id) el.classList.remove('open'); });
+  var menu = document.getElementById(id);
+  menu.classList.toggle('open');
+  if (menu.classList.contains('open')) {
+    var btn = menu.querySelector('button');
+    var rect = btn.getBoundingClientRect();
+    var drop = menu.querySelector('.drop');
+    var dropW = drop.offsetWidth || 170;
+    drop.style.top  = rect.bottom + 'px';
+    drop.style.left = Math.max(4, rect.right - dropW) + 'px';
+  }
+}
+function closeAm() {
+  document.querySelectorAll('.action-menu.open').forEach(function(el) { el.classList.remove('open'); });
+}
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.action-menu')) closeAm();
+});
+
+function viewCert(name) {
+  window.location.href = '/ui/certificates-view.html?name=' + encodeURIComponent(name);
+}
+
+async function setWebuiCert(name) {
+  if (!confirm('Use certificate "'+name+'" for the WebUI TLS?\nTakes effect on next new connection.')) return;
+  try {
+    var r = await fetch('/api/system/webui-cert', {method:'POST', headers:authHeaders(), body:JSON.stringify({cert_name:name})});
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Failed'); return; }
+    alert('WebUI certificate changed to "'+name+'".');
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function deleteCert(name) {
+  if (!confirm('Delete certificate "' + name + '"?')) return;
+  try {
+    var r = await fetch('/api/certs/' + encodeURIComponent(name), {method: 'DELETE', headers: authHeaders()});
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Delete failed'); return; }
+    loadCerts();
+  } catch(e) { alert('Request failed'); }
+}
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+initPage('certs');
+loadCerts();
+</script>
+</body>
+</html>

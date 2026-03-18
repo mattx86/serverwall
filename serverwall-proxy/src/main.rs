@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use serverwall_core::config::{defaults, load_config};
+use serverwall_core::config::{defaults, editor, load_config, schema::{WafExclusions, WafMode, WafRulesetConfig}};
 use serverwall_core::DEFAULT_CONFIG_PATH;
 
 /// ServerWall reverse proxy and load balancer.
@@ -92,7 +92,8 @@ fn run_init() -> anyhow::Result<()> {
     let webui_key = certs_dir.join("webui-key.pem");
     let hostname = get_hostname();
     if !webui_cert.exists() || !webui_key.exists() {
-        serverwall_core::tls::generate_self_signed_cert(&webui_cert, &webui_key, &hostname)?;
+        let extra_ips = collect_local_ips();
+        serverwall_core::tls::generate_self_signed_cert(&webui_cert, &webui_key, &hostname, &extra_ips)?;
         println!("Created: {} (self-signed TLS cert)", webui_cert.display());
         println!("Created: {}", webui_key.display());
     } else {
@@ -108,6 +109,17 @@ fn run_init() -> anyhow::Result<()> {
     } else {
         println!("Exists:  {} (not overwritten)", config_path.display());
     }
+
+    // 3b. Ensure "default" WAF ruleset exists
+    let _ = editor::add_waf_ruleset(&config_path, WafRulesetConfig {
+        name: "default".to_string(),
+        mode: WafMode::Blocking,
+        anomaly_threshold: 5,
+        paranoia_level: 1,
+        rules_dir: None,
+        exclusions: WafExclusions::default(),
+        custom_rules: vec![],
+    });
 
     // 4. Generate a random 32-character admin password and hash it
     let admin_password = generate_random_password(32);
@@ -179,6 +191,18 @@ fn generate_random_password(len: usize) -> String {
         password.push(chars[idx]);
     }
     password
+}
+
+/// Collect all non-loopback IPv4 addresses on the local machine.
+fn collect_local_ips() -> Vec<std::net::IpAddr> {
+    if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|iface| {
+            let ip = iface.addr.ip();
+            if ip.is_loopback() { None } else { Some(ip) }
+        })
+        .collect()
 }
 
 /// Return the system hostname, reading from /etc/hostname.

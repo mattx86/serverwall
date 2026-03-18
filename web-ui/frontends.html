@@ -14,9 +14,9 @@
 <div id="layout">
   <div id="sidebar"></div>
   <div id="main">
-    <div class="toolbar">
+    <div class="toolbar" id="feToolbar">
       <h2 style="margin:0;flex:1">Frontends</h2>
-      <button class="btn btn-primary" onclick="showAddForm()">+ Add Frontend</button>
+      <button class="btn btn-primary" id="addBtn" onclick="showAddForm()">+ Add Frontend</button>
     </div>
 
     <div id="addForm" class="form-panel" style="display:none">
@@ -24,7 +24,7 @@
       <div class="form-grid">
         <div class="form-group">
           <label>Name *</label>
-          <input type="text" id="fName" placeholder="e.g. web">
+          <input type="text" id="fName" placeholder="e.g. web" oninput="autoFillLog()">
         </div>
         <div class="form-group">
           <label>Protocol *</label>
@@ -42,19 +42,32 @@
         </div>
         <div class="form-group">
           <label>Backend Pool *</label>
-          <input type="text" id="fPool" placeholder="e.g. web-pool">
+          <select id="fPool"><option value="">-- select pool --</option></select>
         </div>
         <div class="form-group">
-          <label>TLS Cert Path</label>
-          <input type="text" id="fTlsCert" placeholder="/opt/serverwall/etc/certs/web.pem">
+          <label>Balancer</label>
+          <select id="fBalancer" onchange="toggleStickyField()">
+            <option value="round_robin">Round Robin</option>
+            <option value="least_connections">Least Connections</option>
+            <option value="ip_hash">IP Hash</option>
+            <option value="sticky_session">Sticky Session</option>
+          </select>
+        </div>
+        <div class="form-group" id="fStickyGroup" style="display:none">
+          <label>Session Cookie Name</label>
+          <input type="text" id="fStickyCookie" placeholder="SWSESSION">
         </div>
         <div class="form-group">
-          <label>TLS Key Path</label>
-          <input type="text" id="fTlsKey" placeholder="/opt/serverwall/etc/certs/web-key.pem">
+          <label>TLS Certificate</label>
+          <select id="fTlsCertSelect" onchange="syncCertFields()">
+            <option value="">-- none --</option>
+          </select>
+          <input type="hidden" id="fTlsCert">
+          <input type="hidden" id="fTlsKey">
         </div>
         <div class="form-group">
-          <label>WAF Ruleset (leave blank to disable)</label>
-          <input type="text" id="fWafRuleset" placeholder="default">
+          <label>WAF Ruleset</label>
+          <select id="fWafRuleset"><option value="">-- none --</option></select>
         </div>
         <div class="form-group">
           <label>Max Connections (blank = unlimited)</label>
@@ -68,7 +81,7 @@
           </select>
         </div>
         <div class="form-group">
-          <label>Log File (blank = none)</label>
+          <label>Log File</label>
           <input type="text" id="fLogFile" placeholder="/opt/serverwall/var/log/web.log">
         </div>
       </div>
@@ -78,7 +91,7 @@
           <label class="form-check"><input type="checkbox" id="fXFF" checked> X-Forwarded-For</label>
           <label class="form-check"><input type="checkbox" id="fXRI" checked> X-Real-IP</label>
           <label class="form-check"><input type="checkbox" id="fXFP" checked> X-Forwarded-Proto</label>
-          <label class="form-check"><input type="checkbox" id="fWaf"> WAF Enabled</label>
+          <label class="form-check"><input type="checkbox" id="fWaf" checked> WAF Enabled</label>
         </div>
       </div>
       <div id="fError" class="form-error" style="display:none"></div>
@@ -108,8 +121,95 @@
 </div>
 <script src="/ui/app.js"></script>
 <script>
-function showAddForm(){document.getElementById('addForm').style.display='';document.getElementById('fError').style.display='none'}
-function hideAddForm(){document.getElementById('addForm').style.display='none'}
+var _certMap = {};
+
+function showAddForm() {
+  document.getElementById('addForm').style.display = '';
+  document.getElementById('feTable').style.display = 'none';
+  document.getElementById('addBtn').style.display = 'none';
+  document.getElementById('fError').style.display = 'none';
+  populateDropdowns();
+}
+function hideAddForm() {
+  document.getElementById('addForm').style.display = 'none';
+  document.getElementById('feTable').style.display = '';
+  document.getElementById('addBtn').style.display = '';
+}
+
+function toggleStickyField() {
+  var isSticky = document.getElementById('fBalancer').value === 'sticky_session';
+  document.getElementById('fStickyGroup').style.display = isSticky ? '' : 'none';
+}
+
+function autoFillLog() {
+  var name = document.getElementById('fName').value.trim();
+  var logEl = document.getElementById('fLogFile');
+  if (name) {
+    logEl.value = '/opt/serverwall/var/log/' + name + '.log';
+  } else {
+    logEl.value = '';
+  }
+}
+
+function syncCertFields() {
+  var sel = document.getElementById('fTlsCertSelect').value;
+  if (sel && _certMap[sel]) {
+    document.getElementById('fTlsCert').value = _certMap[sel].cert;
+    document.getElementById('fTlsKey').value  = _certMap[sel].key;
+  } else {
+    document.getElementById('fTlsCert').value = '';
+    document.getElementById('fTlsKey').value  = '';
+  }
+}
+
+async function populateDropdowns() {
+  // Pools
+  try {
+    var r = await fetch('/api/backends', {headers: authHeaders()});
+    var d = await r.json();
+    var poolSel = document.getElementById('fPool');
+    poolSel.innerHTML = '<option value="">-- select pool --</option>';
+    (d.pools || []).forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name;
+      poolSel.appendChild(opt);
+    });
+  } catch(e) {}
+
+  // WAF rulesets
+  try {
+    var r2 = await fetch('/api/waf', {headers: authHeaders()});
+    var d2 = await r2.json();
+    var wafSel = document.getElementById('fWafRuleset');
+    wafSel.innerHTML = '<option value="">-- none --</option>';
+    (d2.waf_rules || []).forEach(function(w, i) {
+      var opt = document.createElement('option');
+      opt.value = w.name; opt.textContent = w.name;
+      if (i === 0) opt.selected = true;
+      wafSel.appendChild(opt);
+    });
+  } catch(e) {}
+
+  // Certificates
+  try {
+    var r3 = await fetch('/api/certs', {headers: authHeaders()});
+    var d3 = await r3.json();
+    var certSel = document.getElementById('fTlsCertSelect');
+    certSel.innerHTML = '<option value="">-- none --</option>';
+    _certMap = {};
+    var certsDir = '/opt/serverwall/etc/certs/';
+    (d3.certificates || []).forEach(function(c) {
+      if (!c.key_exists) return;
+      var opt = document.createElement('option');
+      opt.value = c.name; opt.textContent = c.name + (c.expiry ? '  (exp: '+c.expiry+')' : '');
+      certSel.appendChild(opt);
+      _certMap[c.name] = {
+        cert: certsDir + c.cert_file,
+        key:  certsDir + c.key_file,
+      };
+    });
+  } catch(e) {}
+}
 
 async function loadFrontends() {
   try {
@@ -130,8 +230,7 @@ async function loadFrontends() {
       rows += '<td><button class="btn btn-danger btn-sm" onclick="deleteFrontend(\''+esc(f.name)+'\')">Delete</button></td>';
       rows += '</tr>';
     });
-    document.getElementById('feBody').innerHTML = rows || '<tr><td colspan="7">No frontends configured</td></tr>';
-    // re-check SMTP after load (in case list changed)
+    document.getElementById('feBody').innerHTML = rows || '<tr><td colspan="7" class="empty-state">No frontends configured</td></tr>';
     checkSmtpFrontends();
   } catch(e) {
     document.getElementById('feBody').innerHTML = '<tr><td colspan="7">Error loading frontends</td></tr>';
@@ -158,6 +257,7 @@ async function submitFrontend() {
     protocol: protocol,
     listen: listen,
     backend_pool: pool,
+    balancer: document.getElementById('fBalancer').value,
     waf_enabled: document.getElementById('fWaf').checked,
     headers: {
       x_forwarded_for: document.getElementById('fXFF').checked,

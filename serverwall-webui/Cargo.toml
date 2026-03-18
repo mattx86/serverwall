@@ -40,3 +40,6 @@ uuid = { workspace = true }
 dashmap = { workspace = true }
 arc-swap = { workspace = true }
 clap = { workspace = true }
+if-addrs = { workspace = true }
+openssl = { workspace = true }
+sha2 = { workspace = true }

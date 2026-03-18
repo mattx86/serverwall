@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Let's Encrypt</title>
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar" style="margin-bottom:1rem">
+      <h2 style="margin:0;flex:1">Let's Encrypt (ACME)</h2>
+      <a href="/ui/certificates.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
+    </div>
+    <div class="form-panel">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Name * (e.g. mysite)</label>
+          <input type="text" id="acmeName" placeholder="mysite">
+        </div>
+        <div class="form-group">
+          <label>Email *</label>
+          <input type="email" id="acmeEmail" placeholder="admin@example.com">
+        </div>
+        <div class="form-group">
+          <label>Domain *</label>
+          <input type="text" id="acmeDomain" placeholder="mysite.example.com">
+        </div>
+        <div class="form-group">
+          <label>HTTP-01 Challenge Port</label>
+          <input type="number" id="acmePort" value="8081" min="1" max="65535" disabled style="opacity:.55;cursor:not-allowed">
+        </div>
+      </div>
+      <div id="acmeError" class="form-error" style="display:none"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="requestAcme()">Request Certificate</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+async function requestAcme() {
+  var name   = document.getElementById('acmeName').value.trim();
+  var email  = document.getElementById('acmeEmail').value.trim();
+  var domain = document.getElementById('acmeDomain').value.trim();
+  var port   = parseInt(document.getElementById('acmePort').value) || 8081;
+  var errEl  = document.getElementById('acmeError');
+  if (!name || !email || !domain) {
+    errEl.textContent = 'Name, email, and domain are required.';
+    errEl.style.display = '';
+    return;
+  }
+  try {
+    var r = await fetch('/api/certs/acme', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({name: name, email: email, domain: domain, challenge_port: port}),
+    });
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'ACME request failed'; errEl.style.display = ''; return; }
+    alert('ACME certificate issued successfully.');
+    window.location.href = '/ui/certificates.html';
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+initPage('certs-acme');
+</script>
+</body>
+</html>

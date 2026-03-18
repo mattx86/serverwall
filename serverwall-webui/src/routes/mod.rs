@@ -9,6 +9,7 @@ pub mod logs;
 pub mod reload;
 pub mod queue;
 pub mod antispam;
+pub mod system;
 
 use axum::{
     extract::{Request, State},
@@ -32,11 +33,14 @@ pub fn build_router(state: AppState) -> Router {
     // Public routes (no auth required)
     let public_routes = Router::new()
         .route("/", get(root_redirect))
+        .route("/ui", get(root_redirect))
+        .route("/ui/", get(root_redirect))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
+        .route("/api/auth/captcha", get(auth::captcha))
         .route("/health", get(health_check))
         .route("/ui/login.html", get(static_files::serve_login))
-        // Static assets (CSS, JS, images) served without auth so login page renders correctly
+        // Static assets served here; HTML pages check session cookie inside serve_asset
         .route("/ui/{*path}", get(static_files::serve_asset));
 
     // Protected API routes
@@ -66,8 +70,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/queue/{id}/release", post(queue::release))
         // Certificates
         .route("/api/certs", get(certificates::list))
-        .route("/api/certs/import", post(certificates::create))
-        .route("/api/certs/{id}", get(certificates::get).delete(certificates::delete))
+        .route("/api/certs/import", post(certificates::import))
+        .route("/api/certs/self-signed", post(certificates::generate_self_signed))
+        .route("/api/certs/acme", post(certificates::acme_request))
+        .route("/api/certs/{name}", get(certificates::get).delete(certificates::delete))
         // Antispam
         .route("/api/antispam/stats", get(antispam::stats))
         // Reload
@@ -80,9 +86,16 @@ pub fn build_router(state: AppState) -> Router {
         // WAF
         .route("/api/waf", get(waf::list).post(waf::create))
         .route("/api/waf/{name}", get(waf::get).put(waf::update).delete(waf::delete))
+        .route("/api/waf/{name}/clone", post(waf::clone_ruleset))
+        // System
+        .route("/api/system/webui-cert", post(system::set_webui_cert))
         .route_layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::auth,
+        ))
+        .route_layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            middleware::waf_check,
         ));
 
     Router::new()

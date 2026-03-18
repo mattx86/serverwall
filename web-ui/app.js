@@ -11,10 +11,16 @@ function fmtSize(b){if(!b)return'0B';if(b<1024)return b+'B';if(b<1048576)return(
 
 // ── Navigation ────────────────────────────────────────────────────────────────
 var NAV_ITEMS = [
-  {id:'dashboard', label:'Dashboard', href:'/ui/index.html'},
-  {id:'frontends', label:'Frontends',  href:'/ui/frontends.html'},
-  {id:'backends',  label:'Backends',   href:'/ui/backends.html'},
-  {id:'queue',     label:'Mail Queue', href:'/ui/queue.html', navId:'nav-queue'},
+  {id:'dashboard',  label:'Dashboard',    href:'/ui/index.html'},
+  {id:'frontends',  label:'Frontends',    href:'/ui/frontends.html'},
+  {id:'backends',   label:'Backends',     href:'/ui/backends.html'},
+  {id:'certs',      label:'Certificates', href:'/ui/certificates.html', children:[
+    {id:'certs-import',   label:'Import',        href:'/ui/certificates-import.html'},
+    {id:'certs-generate', label:'Generate',      href:'/ui/certificates-generate.html'},
+    {id:'certs-acme',     label:"Let's Encrypt", href:'/ui/certificates-acme.html'},
+  ]},
+  {id:'waf',        label:'WAF Rulesets', href:'/ui/waf.html'},
+  {id:'queue',      label:'Mail Queue',   href:'/ui/queue.html', navId:'nav-queue'},
 ];
 
 function buildNav(activePage) {
@@ -22,9 +28,22 @@ function buildNav(activePage) {
   if (!sb) return;
   var html = '<div class="nav-section">Navigation</div>';
   NAV_ITEMS.forEach(function(item) {
-    var cls = item.id === activePage ? ' class="active"' : '';
-    var id  = item.navId ? ' id="'+item.navId+'"' : '';
-    html += '<a href="'+item.href+'"'+cls+id+'>'+item.label+'</a>';
+    var id    = item.navId ? ' id="'+item.navId+'"' : '';
+    var style = item.navId ? ' style="display:none"' : '';
+    if (item.children) {
+      var groupActive = activePage === item.id || activePage.indexOf(item.id + '-') === 0;
+      var cls = groupActive ? ' class="active"' : '';
+      html += '<a href="'+item.href+'"'+cls+id+style+'>'+item.label+'</a>';
+      if (groupActive) {
+        item.children.forEach(function(child) {
+          var childCls = activePage === child.id ? ' class="nav-child active"' : ' class="nav-child"';
+          html += '<a href="'+child.href+'"'+childCls+'>'+child.label+'</a>';
+        });
+      }
+    } else {
+      var cls = item.id === activePage ? ' class="active"' : '';
+      html += '<a href="'+item.href+'"'+cls+id+style+'>'+item.label+'</a>';
+    }
   });
   sb.innerHTML = html;
 }

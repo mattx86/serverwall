@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - WAF Rulesets</title>
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+
+    <!-- Toolbar (hidden when add/edit form open) -->
+    <div class="toolbar" id="wafToolbar">
+      <h2 style="margin:0;flex:1">WAF Rulesets</h2>
+      <button class="btn btn-primary" id="addWafBtn" onclick="showAddForm()">+ Add Ruleset</button>
+    </div>
+
+    <!-- Add Ruleset Form -->
+    <div id="addWafForm" class="form-panel" style="display:none">
+      <h3>Add WAF Ruleset</h3>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Name *</label>
+          <input type="text" id="wName" placeholder="e.g. strict">
+        </div>
+        <div class="form-group">
+          <label>Mode</label>
+          <select id="wMode">
+            <option value="blocking">Blocking</option>
+            <option value="detection_only">Detection Only</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Anomaly Threshold</label>
+          <input type="number" id="wThreshold" value="5" min="1">
+        </div>
+        <div class="form-group">
+          <label>Paranoia Level</label>
+          <select id="wParanoia">
+            <option value="1">1 — Basic</option>
+            <option value="2">2 — Moderate</option>
+            <option value="3">3 — Strict</option>
+            <option value="4">4 — Very Strict</option>
+          </select>
+        </div>
+      </div>
+      <div id="wError" class="form-error" style="display:none"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="submitAddRuleset()">Create Ruleset</button>
+        <button class="btn btn-secondary" onclick="hideAddForm()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Edit / View Ruleset Form -->
+    <div id="editWafForm" class="form-panel" style="display:none">
+      <h3 id="editWafTitle">Edit WAF Ruleset: <span id="editWafName"></span></h3>
+      <input type="hidden" id="editWafNameHidden">
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Mode</label>
+          <select id="eMode">
+            <option value="blocking">Blocking</option>
+            <option value="detection_only">Detection Only</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Anomaly Threshold</label>
+          <input type="number" id="eThreshold" value="5" min="1">
+        </div>
+        <div class="form-group">
+          <label>Paranoia Level</label>
+          <select id="eParanoia">
+            <option value="1">1 — Basic</option>
+            <option value="2">2 — Moderate</option>
+            <option value="3">3 — Strict</option>
+            <option value="4">4 — Very Strict</option>
+          </select>
+        </div>
+      </div>
+      <div id="eError" class="form-error" style="display:none"></div>
+      <div class="form-actions" id="editFormActions">
+        <button class="btn btn-primary" id="saveEditBtn" onclick="submitEditRuleset()">Save Changes</button>
+        <button class="btn btn-secondary" onclick="hideEditForm()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Rulesets Table -->
+    <table id="wafTable">
+      <thead>
+        <tr><th>Name</th><th>Mode</th><th>Anomaly Threshold</th><th>Paranoia Level</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="wafBody">
+        <tr><td colspan="5">Loading...</td></tr>
+      </tbody>
+    </table>
+
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function showAddForm() {
+  document.getElementById('addWafForm').style.display = '';
+  document.getElementById('editWafForm').style.display = 'none';
+  document.getElementById('wafTable').style.display = 'none';
+  document.getElementById('addWafBtn').style.display = 'none';
+  document.getElementById('wError').style.display = 'none';
+}
+function hideAddForm() {
+  document.getElementById('addWafForm').style.display = 'none';
+  document.getElementById('wafTable').style.display = '';
+  document.getElementById('addWafBtn').style.display = '';
+}
+
+var _wafData = {};
+
+function showEditForm(r) {
+  document.getElementById('editWafForm').style.display = '';
+  document.getElementById('addWafForm').style.display = 'none';
+  document.getElementById('wafTable').style.display = 'none';
+  document.getElementById('addWafBtn').style.display = 'none';
+  document.getElementById('eError').style.display = 'none';
+  document.getElementById('editWafTitle').innerHTML = 'Edit WAF Ruleset: <span id="editWafName">'+esc(r.name)+'</span>';
+  document.getElementById('editWafNameHidden').value = r.name;
+  document.getElementById('eMode').value = r.mode || 'blocking';
+  document.getElementById('eThreshold').value = r.anomaly_threshold || 5;
+  document.getElementById('eParanoia').value = r.paranoia_level || 1;
+  document.getElementById('eMode').disabled = false;
+  document.getElementById('eThreshold').disabled = false;
+  document.getElementById('eParanoia').disabled = false;
+  document.getElementById('saveEditBtn').style.display = '';
+}
+function editRuleset(name) { showEditForm(_wafData[name]); }
+function viewRuleset(name) {
+  showEditForm(_wafData[name]);
+  document.getElementById('editWafTitle').innerHTML = 'View WAF Ruleset: <span id="editWafName">'+esc(name)+'</span>';
+  document.getElementById('eMode').disabled = true;
+  document.getElementById('eThreshold').disabled = true;
+  document.getElementById('eParanoia').disabled = true;
+  document.getElementById('saveEditBtn').style.display = 'none';
+}
+function hideEditForm() {
+  document.getElementById('editWafForm').style.display = 'none';
+  document.getElementById('wafTable').style.display = '';
+  document.getElementById('addWafBtn').style.display = '';
+  // Re-enable fields for next edit
+  document.getElementById('eMode').disabled = false;
+  document.getElementById('eThreshold').disabled = false;
+  document.getElementById('eParanoia').disabled = false;
+  document.getElementById('saveEditBtn').style.display = '';
+}
+
+async function loadWaf() {
+  try {
+    var r = await fetch('/api/waf', {headers: authHeaders()});
+    var d = await r.json();
+    var rows = '';
+    _wafData = {};
+    (d.waf_rules || []).forEach(function(w) {
+      _wafData[w.name] = w;
+      var isDefault = w.name === 'default';
+      var modeBadge = w.mode === 'blocking'
+        ? '<span class="badge badge-red">blocking</span>'
+        : w.mode === 'detection_only'
+          ? '<span class="badge badge-gray">detection</span>'
+          : '<span class="badge badge-gray">disabled</span>';
+      rows += '<tr>';
+      rows += '<td><strong>'+esc(w.name)+'</strong>'+(isDefault?' <span class="badge badge-gray" style="font-size:.7rem">default</span>':'')+'</td>';
+      rows += '<td>'+modeBadge+'</td>';
+      rows += '<td>'+esc(w.anomaly_threshold)+'</td>';
+      rows += '<td>'+esc(w.paranoia_level)+'</td>';
+      rows += '<td>';
+      if (isDefault) {
+        rows += '<button class="btn btn-secondary btn-sm" onclick="viewRuleset(\''+esc(w.name)+'\')">View</button> ';
+      } else {
+        rows += '<button class="btn btn-secondary btn-sm" onclick="editRuleset(\''+esc(w.name)+'\')">Edit</button> ';
+      }
+      rows += '<button class="btn btn-secondary btn-sm" onclick="cloneRuleset(\''+esc(w.name)+'\')">Clone</button>';
+      if (!isDefault) {
+        rows += ' <button class="btn btn-danger btn-sm" onclick="deleteRuleset(\''+esc(w.name)+'\')">Delete</button>';
+      }
+      rows += '</td>';
+      rows += '</tr>';
+    });
+    document.getElementById('wafBody').innerHTML = rows || '<tr><td colspan="5" class="empty-state">No WAF rulesets configured</td></tr>';
+  } catch(e) {
+    document.getElementById('wafBody').innerHTML = '<tr><td colspan="5">Error loading WAF rulesets</td></tr>';
+  }
+}
+
+async function submitAddRuleset() {
+  var name     = document.getElementById('wName').value.trim();
+  var errEl    = document.getElementById('wError');
+  if (!name) { errEl.textContent = 'Name is required.'; errEl.style.display = ''; return; }
+
+  var body = {
+    name: name,
+    mode: document.getElementById('wMode').value,
+    anomaly_threshold: parseInt(document.getElementById('wThreshold').value) || 5,
+    paranoia_level: parseInt(document.getElementById('wParanoia').value) || 1,
+  };
+
+  try {
+    var r = await fetch('/api/waf', {method: 'POST', headers: authHeaders(), body: JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Create failed'; errEl.style.display = ''; return; }
+    hideAddForm();
+    loadWaf();
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+async function submitEditRuleset() {
+  var name  = document.getElementById('editWafNameHidden').value;
+  var errEl = document.getElementById('eError');
+
+  var body = {
+    name: name,
+    mode: document.getElementById('eMode').value,
+    anomaly_threshold: parseInt(document.getElementById('eThreshold').value) || 5,
+    paranoia_level: parseInt(document.getElementById('eParanoia').value) || 1,
+  };
+
+  try {
+    var r = await fetch('/api/waf/' + encodeURIComponent(name), {method: 'PUT', headers: authHeaders(), body: JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Update failed'; errEl.style.display = ''; return; }
+    hideEditForm();
+    loadWaf();
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+async function cloneRuleset(name) {
+  var newName = prompt('Clone "' + name + '" — enter new ruleset name:');
+  if (!newName) return;
+  newName = newName.trim();
+  if (!newName) return;
+  try {
+    var r = await fetch('/api/waf/' + encodeURIComponent(name) + '/clone', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({new_name: newName}),
+    });
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Clone failed'); return; }
+    loadWaf();
+  } catch(e) { alert('Request failed'); }
+}
+
+async function deleteRuleset(name) {
+  if (!confirm('Delete WAF ruleset "' + name + '"?')) return;
+  try {
+    var r = await fetch('/api/waf/' + encodeURIComponent(name), {method: 'DELETE', headers: authHeaders()});
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Delete failed'); return; }
+    loadWaf();
+  } catch(e) { alert('Request failed'); }
+}
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+initPage('waf');
+loadWaf();
+</script>
+</body>
+</html>

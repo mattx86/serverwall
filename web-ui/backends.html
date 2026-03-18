@@ -10,6 +10,9 @@
 .pool-header strong{flex:1;font-size:.95rem}
 .pool-block{margin-bottom:1.2rem}
 .pool-block table{border-radius:0 0 6px 6px;margin-bottom:0}
+.member-row{display:grid;grid-template-columns:2fr 1.5fr 0.7fr auto auto auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
+.member-row input,.member-row select{padding:.35rem .5rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:.85rem}
+.member-row label{font-size:.82rem;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -20,9 +23,9 @@
 <div id="layout">
   <div id="sidebar"></div>
   <div id="main">
-    <div class="toolbar">
+    <div class="toolbar" id="poolToolbar">
       <h2 style="margin:0;flex:1">Backend Pools</h2>
-      <button class="btn btn-primary" onclick="showPoolForm()">+ Add Pool</button>
+      <button class="btn btn-primary" id="addPoolBtn" onclick="showPoolForm()">+ Add Pool</button>
     </div>
 
     <!-- Add Pool Form -->
@@ -59,22 +62,22 @@
           <input type="number" id="pHcExpect" value="200" min="100" max="599">
         </div>
       </div>
-      <div style="margin-top:.8rem">
-        <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.5rem">Initial Backend (optional)</label>
-        <div class="form-grid">
-          <div class="form-group">
-            <label>Address</label>
-            <input type="text" id="b0Addr" placeholder="127.0.0.1:8080">
-          </div>
-          <div class="form-group">
-            <label>Weight</label>
-            <input type="number" id="b0Weight" value="1" min="1">
-          </div>
-          <div class="form-group" style="justify-content:flex-end">
-            <label class="form-check" style="margin-top:1.4rem"><input type="checkbox" id="b0Tls"> TLS</label>
-          </div>
-        </div>
+      <div style="margin-top:.8rem;display:flex;gap:1.2rem;flex-wrap:wrap">
+        <label class="form-check"><input type="checkbox" id="pHcTls"> HC TLS</label>
+        <label class="form-check"><input type="checkbox" id="pHcIgnoreCert"> HC Ignore Cert</label>
       </div>
+
+      <div style="margin-top:1rem">
+        <div style="display:flex;align-items:center;gap:.7rem;margin-bottom:.5rem">
+          <span style="font-size:.8rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em">Pool Members</span>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="addMemberRow()">+ Add Member</button>
+        </div>
+        <div style="font-size:.75rem;color:var(--muted);margin-bottom:.4rem;display:grid;grid-template-columns:2fr 1.5fr 0.7fr auto auto auto auto;gap:.5rem">
+          <span>Address *</span><span>Name</span><span>Weight</span><span>TLS</span><span>Enabled</span><span></span>
+        </div>
+        <div id="memberRows"></div>
+      </div>
+
       <div id="pError" class="form-error" style="display:none"></div>
       <div class="form-actions">
         <button class="btn btn-primary" onclick="submitPool()">Create Pool</button>
@@ -82,96 +85,89 @@
       </div>
     </div>
 
-    <!-- Add Backend Form (per pool) -->
-    <div id="addBackendForm" class="form-panel" style="display:none">
-      <h3>Add Backend to pool: <span id="addBackendPoolName"></span></h3>
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Address * (host:port)</label>
-          <input type="text" id="bAddr" placeholder="192.168.1.10:8080">
-        </div>
-        <div class="form-group">
-          <label>Name (optional, defaults to address)</label>
-          <input type="text" id="bName" placeholder="">
-        </div>
-        <div class="form-group">
-          <label>Weight</label>
-          <input type="number" id="bWeight" value="1" min="1">
-        </div>
-        <div class="form-group" style="justify-content:flex-end">
-          <label class="form-check" style="margin-top:1.4rem"><input type="checkbox" id="bTls"> Backend TLS</label>
-        </div>
-      </div>
-      <div id="bError" class="form-error" style="display:none"></div>
-      <div class="form-actions">
-        <button class="btn btn-primary" onclick="submitBackend()">Add Backend</button>
-        <button class="btn btn-secondary" onclick="hideBackendForm()">Cancel</button>
-      </div>
-    </div>
-
-    <div id="poolList"><p style="color:var(--muted)">Loading...</p></div>
+    <table id="poolTable">
+      <thead>
+        <tr><th>Name</th><th>Health Check</th><th>Interval</th><th>Backends</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="poolBody">
+        <tr><td colspan="5">Loading...</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 <script src="/ui/app.js"></script>
 <script>
-var editingPoolName = null;
+var memberCount = 0;
 
-function showPoolForm(){document.getElementById('addPoolForm').style.display='';document.getElementById('pError').style.display='none'}
-function hidePoolForm(){document.getElementById('addPoolForm').style.display='none'}
-function showBackendForm(poolName){
-  editingPoolName = poolName;
-  document.getElementById('addBackendPoolName').textContent = poolName;
-  document.getElementById('bAddr').value='';
-  document.getElementById('bName').value='';
-  document.getElementById('bWeight').value='1';
-  document.getElementById('bTls').checked=false;
-  document.getElementById('bError').style.display='none';
-  document.getElementById('addBackendForm').style.display='';
-  document.getElementById('addBackendForm').scrollIntoView({behavior:'smooth',block:'nearest'});
+function showPoolForm() {
+  document.getElementById('addPoolForm').style.display = '';
+  document.getElementById('poolTable').style.display = 'none';
+  document.getElementById('addPoolBtn').style.display = 'none';
+  document.getElementById('pError').style.display = 'none';
+  memberCount = 0;
+  document.getElementById('memberRows').innerHTML = '';
+  addMemberRow();
 }
-function hideBackendForm(){document.getElementById('addBackendForm').style.display='none';editingPoolName=null}
+function hidePoolForm() {
+  document.getElementById('addPoolForm').style.display = 'none';
+  document.getElementById('poolTable').style.display = '';
+  document.getElementById('addPoolBtn').style.display = '';
+}
+
+function addMemberRow() {
+  var i = memberCount++;
+  var row = document.createElement('div');
+  row.className = 'member-row';
+  row.id = 'member-' + i;
+  row.innerHTML =
+    '<input type="text" id="mAddr'+i+'" placeholder="host:port">' +
+    '<input type="text" id="mName'+i+'" placeholder="(optional)">' +
+    '<input type="number" id="mWeight'+i+'" value="1" min="1">' +
+    '<label class="form-check" style="white-space:nowrap"><input type="checkbox" id="mTls'+i+'"> TLS</label>' +
+    '<label class="form-check" style="white-space:nowrap"><input type="checkbox" id="mEnabled'+i+'" checked> On</label>' +
+    '<button type="button" class="btn btn-danger btn-sm" onclick="removeMemberRow('+i+')" style="padding:.2rem .45rem">✕</button>';
+  document.getElementById('memberRows').appendChild(row);
+}
+
+function removeMemberRow(i) {
+  var el = document.getElementById('member-' + i);
+  if (el) el.remove();
+}
+
 
 async function loadPools() {
   try {
     var r = await fetch('/api/backends', {headers: authHeaders()});
     var d = await r.json();
     var pools = d.pools || [];
-    var html = '';
+    var rows = '';
     if (!pools.length) {
-      html = '<p style="color:var(--muted)">No backend pools configured</p>';
+      rows = '<tr><td colspan="5" class="empty-state">No backend pools configured</td></tr>';
     } else {
       pools.forEach(function(p) {
-        html += '<div class="pool-block">';
-        html += '<div class="pool-header">';
-        html += '<strong>'+esc(p.name)+'</strong>';
-        html += '<span style="font-size:.8rem;color:var(--muted)">'+esc(p.health_check_type)+'&nbsp;&bull;&nbsp;'+esc(p.health_check_interval||'')+'</span>';
-        html += '<button class="btn btn-secondary btn-sm" onclick="showBackendForm(\''+esc(p.name)+'\')">+ Backend</button>';
-        html += '<button class="btn btn-danger btn-sm" onclick="deletePool(\''+esc(p.name)+'\')">Delete Pool</button>';
-        html += '</div>';
-        html += '<table><thead><tr><th>Name</th><th>Address</th><th>Weight</th><th>TLS</th><th>Enabled</th></tr></thead><tbody>';
-        var backends = p.backends || [];
-        if (!backends.length) {
-          html += '<tr><td colspan="5" style="color:var(--muted)">No backends in this pool</td></tr>';
-        } else {
-          backends.forEach(function(b) {
-            var tls  = b.tls     ? '<span class="badge badge-green">yes</span>' : '<span class="badge badge-gray">no</span>';
-            var enbl = b.enabled !== false ? '<span class="badge badge-green">yes</span>' : '<span class="badge badge-red">no</span>';
-            html += '<tr><td>'+esc(b.name)+'</td><td>'+esc(b.address)+'</td><td>'+esc(b.weight||1)+'</td><td>'+tls+'</td><td>'+enbl+'</td></tr>';
-          });
-        }
-        html += '</tbody></table></div>';
+        var count = (p.backends || []).length;
+        rows += '<tr>';
+        rows += '<td><strong>'+esc(p.name)+'</strong></td>';
+        rows += '<td>'+esc(p.health_check_type)+'</td>';
+        rows += '<td>'+esc(p.health_check_interval||'10s')+'</td>';
+        rows += '<td>'+count+'</td>';
+        rows += '<td>';
+        rows += '<a class="btn btn-secondary btn-sm" href="/ui/backends-edit.html?pool='+encodeURIComponent(p.name)+'">Edit</a> ';
+        rows += '<button class="btn btn-danger btn-sm" onclick="deletePool(\''+esc(p.name)+'\')">Delete</button>';
+        rows += '</td>';
+        rows += '</tr>';
       });
     }
-    document.getElementById('poolList').innerHTML = html;
+    document.getElementById('poolBody').innerHTML = rows;
   } catch(e) {
-    document.getElementById('poolList').innerHTML = '<p style="color:var(--danger)">Error loading backends</p>';
+    document.getElementById('poolBody').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">Error loading backends</td></tr>';
   }
 }
 
 async function submitPool() {
   var name = document.getElementById('pName').value.trim();
   var errEl = document.getElementById('pError');
-  if (!name) { errEl.textContent='Pool name is required.'; errEl.style.display=''; return; }
+  if (!name) { errEl.textContent = 'Pool name is required.'; errEl.style.display = ''; return; }
 
   var body = {
     name: name,
@@ -179,72 +175,45 @@ async function submitPool() {
     health_check_interval: document.getElementById('pHcInterval').value.trim() || '10s',
     health_check_timeout:  document.getElementById('pHcTimeout').value.trim()  || '3s',
     health_check_expect: parseInt(document.getElementById('pHcExpect').value) || 200,
+    health_check_tls: document.getElementById('pHcTls').checked,
+    health_check_ignore_cert: document.getElementById('pHcIgnoreCert').checked,
     backend: [],
   };
 
   var hcPath = document.getElementById('pHcPath').value.trim();
   if (hcPath) body.health_check_path = hcPath;
 
-  var initAddr = document.getElementById('b0Addr').value.trim();
-  if (initAddr) {
+  // Collect member rows
+  document.querySelectorAll('[id^="member-"]').forEach(function(row) {
+    var i = row.id.replace('member-', '');
+    var addrEl = document.getElementById('mAddr' + i);
+    if (!addrEl) return;
+    var addr = addrEl.value.trim();
+    if (!addr) return;
     body.backend.push({
-      name: initAddr,
-      address: initAddr,
-      weight: parseInt(document.getElementById('b0Weight').value) || 1,
-      tls: document.getElementById('b0Tls').checked,
-      enabled: true,
+      name: document.getElementById('mName' + i).value.trim() || addr,
+      address: addr,
+      weight: parseInt(document.getElementById('mWeight' + i).value) || 1,
+      tls: document.getElementById('mTls' + i).checked,
+      enabled: document.getElementById('mEnabled' + i).checked,
     });
-  }
+  });
 
   try {
-    var r = await fetch('/api/backends', {method:'POST', headers:authHeaders(), body:JSON.stringify(body)});
+    var r = await fetch('/api/backends', {method: 'POST', headers: authHeaders(), body: JSON.stringify(body)});
     var res = await r.json();
-    if (!r.ok) { errEl.textContent = res.error||'Create failed'; errEl.style.display=''; return; }
+    if (!r.ok) { errEl.textContent = res.error || 'Create failed'; errEl.style.display = ''; return; }
     hidePoolForm();
     loadPools();
-  } catch(e) { errEl.textContent='Request failed: '+e.message; errEl.style.display=''; }
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
 }
 
-async function submitBackend() {
-  var addr  = document.getElementById('bAddr').value.trim();
-  var errEl = document.getElementById('bError');
-  if (!addr || !editingPoolName) { errEl.textContent='Address is required.'; errEl.style.display=''; return; }
-
-  // To add a backend we must fetch the pool, append, then re-POST... but the API only
-  // supports DELETE/POST on the whole pool. So we fetch the current pool, append, recreate.
-  try {
-    var r = await fetch('/api/backends/'+encodeURIComponent(editingPoolName), {headers:authHeaders()});
-    if (!r.ok) { errEl.textContent='Could not load pool'; errEl.style.display=''; return; }
-    var d  = await r.json();
-    var pool = d.pool;
-
-    var bname = document.getElementById('bName').value.trim() || addr;
-    pool.backend = pool.backends || [];
-    pool.backend.push({
-      name: bname,
-      address: addr,
-      weight: parseInt(document.getElementById('bWeight').value) || 1,
-      tls: document.getElementById('bTls').checked,
-      enabled: true,
-    });
-    // Remove the backends key (use backend)
-    delete pool.backends;
-
-    // Delete old, re-create
-    await fetch('/api/backends/'+encodeURIComponent(editingPoolName), {method:'DELETE', headers:authHeaders()});
-    var r2 = await fetch('/api/backends', {method:'POST', headers:authHeaders(), body:JSON.stringify(pool)});
-    var res = await r2.json();
-    if (!r2.ok) { errEl.textContent = res.error||'Create failed'; errEl.style.display=''; return; }
-    hideBackendForm();
-    loadPools();
-  } catch(e) { errEl.textContent='Request failed: '+e.message; errEl.style.display=''; }
-}
 
 async function deletePool(name) {
-  if (!confirm('Delete backend pool "'+name+'"?\nAll frontends using this pool will lose their backend.')) return;
+  if (!confirm('Delete backend pool "' + name + '"?\nAll frontends using this pool will lose their backend.')) return;
   try {
-    var r = await fetch('/api/backends/'+encodeURIComponent(name), {method:'DELETE', headers:authHeaders()});
-    if (!r.ok) { var d=await r.json(); alert(d.error||'Delete failed'); return; }
+    var r = await fetch('/api/backends/' + encodeURIComponent(name), {method: 'DELETE', headers: authHeaders()});
+    if (!r.ok) { var d = await r.json(); alert(d.error || 'Delete failed'); return; }
     loadPools();
   } catch(e) { alert('Request failed'); }
 }

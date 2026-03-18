@@ -1,0 +1,35 @@
+# Runtime image — copies release binaries from the pre-built serverwall-release image.
+# Requires: docker compose --profile release build release (already done)
+# No Rust compilation needed.
+
+FROM serverwall-release AS binaries
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r serverwall && useradd -r -g serverwall -s /usr/sbin/nologin serverwall \
+    && mkdir -p /opt/serverwall/bin \
+    && mkdir -p /opt/serverwall/etc/{certs,dkim,acme} \
+    && mkdir -p /opt/serverwall/var/{log,lib,spool} \
+    && mkdir -p /opt/serverwall/run \
+    && chown -R serverwall:serverwall /opt/serverwall
+
+COPY --from=binaries /package/bin/serverwall        /opt/serverwall/bin/serverwall
+COPY --from=binaries /package/bin/serverwall-webui  /opt/serverwall/bin/serverwall-webui
+COPY --from=binaries /package/bin/serverwallctl     /opt/serverwall/bin/serverwallctl
+
+COPY test/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+    && chmod +x /opt/serverwall/bin/serverwall \
+    && chmod +x /opt/serverwall/bin/serverwall-webui \
+    && chmod +x /opt/serverwall/bin/serverwallctl
+
+EXPOSE 80 443 8443
+
+ENTRYPOINT ["/entrypoint.sh"]

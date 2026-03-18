@@ -77,7 +77,13 @@ pub async fn get(
                 Json(json!({
                     "pool": {
                         "name": p.name,
-                        "health_check_type": format!("{:?}", p.health_check_type).to_lowercase(),
+                        "health_check_type":        format!("{:?}", p.health_check_type).to_lowercase(),
+                        "health_check_interval":    p.health_check_interval,
+                        "health_check_timeout":     p.health_check_timeout,
+                        "health_check_path":        p.health_check_path,
+                        "health_check_expect":      p.health_check_expect,
+                        "health_check_tls":         p.health_check_tls,
+                        "health_check_ignore_cert": p.health_check_ignore_cert,
                         "backends": backends,
                     }
                 })),
@@ -95,6 +101,18 @@ pub async fn create(
     State(state): State<AppState>,
     Json(pool): Json<BackendPoolConfig>,
 ) -> (StatusCode, Json<Value>) {
+    // Validate the new state before touching disk.
+    {
+        let mut test = (**state.config.load()).clone();
+        test.backend_pool.push(pool.clone());
+        if let Err(e) = serverwall_core::config::validate_config(&test) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": e.to_string()})),
+            );
+        }
+    }
+
     match editor::add_backend_pool(&state.config_path, pool) {
         Ok(()) => {
             state.reload_config();

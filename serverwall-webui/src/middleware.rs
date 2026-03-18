@@ -1,4 +1,7 @@
+use std::net::{IpAddr, Ipv4Addr};
+
 use axum::{
+    body::Body,
     extract::{Request, State},
     http::{header, StatusCode},
     middleware::Next,
@@ -143,4 +146,86 @@ async fn validate_api_token(token: &str, state: &AppState) -> bool {
     }
 
     false
+}
+
+/// WAF middleware — runs every API request through the WAF engine.
+///
+/// Buffers the request body (≤ 1 MiB), inspects URI + headers + body,
+/// and returns 403 if the WAF verdict is Block.
+pub async fn waf_check(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let client_ip = extract_client_ip(request.headers());
+
+    // Consume the body so we can inspect it, then reconstruct.
+    let (parts, body) = request.into_parts();
+    let body_bytes = match axum::body::to_bytes(body, 1024 * 1024).await {
+        Ok(b)  => b,
+        Err(_) => {
+            return (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                axum::Json(serde_json::json!({"error": "request body too large"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Build WAF context from request parts.
+    let mut headers_map = std::collections::HashMap::new();
+    for (k, v) in parts.headers.iter() {
+        if let Ok(v_str) = v.to_str() {
+            headers_map.insert(k.as_str().to_string(), v_str.to_string());
+        }
+    }
+
+    let ctx = serverwall_waf::HttpRequestContext::from_parts(
+        parts.method.as_str(),
+        &parts.uri.to_string(),
+        headers_map,
+        body_bytes.to_vec(),
+        client_ip,
+    );
+
+    let verdict = state.waf_engine.inspect(&ctx);
+
+    if verdict.decision.is_blocked() {
+        tracing::warn!(
+            method = %parts.method,
+            uri    = %parts.uri,
+            score  = verdict.anomaly_score,
+            rules  = ?verdict.matched_rules,
+            "webui WAF: request blocked",
+        );
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({"error": "Forbidden"})),
+        )
+            .into_response();
+    }
+
+    // Reconstruct the request with the buffered body.
+    let request = Request::from_parts(parts, Body::from(body_bytes));
+    next.run(request).await
+}
+
+fn extract_client_ip(headers: &axum::http::HeaderMap) -> IpAddr {
+    if let Some(fwd) = headers.get("x-forwarded-for") {
+        if let Ok(s) = fwd.to_str() {
+            if let Some(first) = s.split(',').next() {
+                if let Ok(ip) = first.trim().parse() {
+                    return ip;
+                }
+            }
+        }
+    }
+    if let Some(real) = headers.get("x-real-ip") {
+        if let Ok(s) = real.to_str() {
+            if let Ok(ip) = s.trim().parse() {
+                return ip;
+            }
+        }
+    }
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
 }

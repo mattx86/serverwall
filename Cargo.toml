@@ -36,7 +36,9 @@ tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "=0.2.4"
 
 # Web framework
-axum = "=0.8.8"
+axum = { version = "=0.8.8", features = ["multipart"] }
+if-addrs = "0.13"
+sha2 = "0.10"
 tower = "=0.5.3"
 tower-http = { version = "=0.6.8", features = ["cors", "compression-gzip", "fs"] }
 

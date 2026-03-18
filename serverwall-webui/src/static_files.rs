@@ -1,9 +1,12 @@
 use axum::{
-    extract::Path,
+    extract::{Path, State},
     http::{header, StatusCode},
     response::{Html, IntoResponse, Response},
 };
 use rust_embed::Embed;
+
+use crate::middleware;
+use crate::state::AppState;
 
 #[derive(Embed)]
 #[folder = "../web-ui/"]
@@ -15,8 +18,38 @@ pub async fn serve_login() -> Response {
 }
 
 /// Serve any embedded static asset by path (catch-all for /ui/{*path}).
-pub async fn serve_asset(Path(path): Path<String>) -> Response {
+/// HTML pages (except login.html) require a valid session cookie.
+pub async fn serve_asset(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Path(path): Path<String>,
+) -> Response {
+    if path.ends_with(".html") && path != "login.html" {
+        if !has_valid_session(&headers, &state) {
+            return (
+                StatusCode::FOUND,
+                [(header::LOCATION, "/ui/login.html")],
+            )
+                .into_response();
+        }
+    }
     serve_embedded_file(&path).await
+}
+
+fn has_valid_session(headers: &axum::http::HeaderMap, state: &AppState) -> bool {
+    if let Some(cookie_header) = headers.get(header::COOKIE) {
+        if let Ok(cookies) = cookie_header.to_str() {
+            for cookie in cookies.split(';') {
+                let cookie = cookie.trim();
+                if let Some(token) = cookie.strip_prefix("lg_session=") {
+                    if middleware::validate_jwt(token, &state.jwt_secret).is_some() {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 async fn serve_embedded_file(path: &str) -> Response {

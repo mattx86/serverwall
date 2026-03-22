@@ -6,15 +6,18 @@
 <title>ServerWall - Antispam</title>
 <link rel="stylesheet" href="/ui/app.css">
 <style>
-.check-row{display:flex;align-items:center;gap:.6rem;padding:.38rem 0;border-bottom:1px solid rgba(255,255,255,.05)}
-.check-row:last-child{border-bottom:none}
+.check-row{display:flex;align-items:center;gap:.6rem;padding:.38rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
+.check-row:last-of-type{border-bottom:none}
 .check-name{flex:1;font-size:.88rem}
-.check-weight{font-size:.8rem;color:var(--muted);min-width:4rem;text-align:right}
-.section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:1rem 0 .4rem}
+.check-weight-input{width:5rem;font-size:.82rem}
+.threshold-row{display:flex;align-items:center;gap:.6rem;padding:.3rem 0;max-width:640px;font-size:.88rem}
+.threshold-row label{flex:1}
+.threshold-row input{width:5rem;font-size:.82rem}
+.section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:.5rem 0 .2rem}
 .list-table{width:100%;border-collapse:collapse;font-size:.85rem}
-.list-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
+.list-table td{padding:.2rem .4rem;border-bottom:1px solid rgba(255,255,255,.04)}
 .list-table td:last-child{width:60px;text-align:right}
-.add-row{display:flex;gap:.4rem;margin-top:.5rem}
+.add-row{display:flex;gap:.4rem;margin-top:.25rem}
 .add-row input{flex:1}
 .tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1rem}
 .tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
@@ -35,6 +38,10 @@
   <div id="main">
     <div class="toolbar">
       <h2 style="margin:0;flex:1">Antispam</h2>
+      <div style="display:flex;align-items:center;gap:.5rem;font-size:.85rem">
+        <span style="color:var(--muted)">Antispam enabled</span>
+        <label class="switch"><input type="checkbox" id="asEnabled" onchange="saveEnabled()"><span class="slider"></span></label>
+      </div>
     </div>
 
     <div id="loadError" class="form-error" style="display:none"></div>
@@ -42,8 +49,11 @@
     <!-- Tabs -->
     <div class="tabs">
       <div class="tab active" onclick="switchTab('lists')">Lists</div>
+      <div class="tab" onclick="switchTab('recipients')">Recipients</div>
       <div class="tab" onclick="switchTab('dnsbl')">DNSBL Zones</div>
+      <div class="tab" onclick="switchTab('surbl')">SURBL Zones</div>
       <div class="tab" onclick="switchTab('config')">Check Config</div>
+      <div class="tab" onclick="switchTab('overrides')">Domain Overrides</div>
     </div>
 
     <!-- Lists tab -->
@@ -107,6 +117,30 @@
       </div>
     </div>
 
+    <!-- Recipients tab -->
+    <div id="tab-recipients" class="tab-panel">
+      <div class="form-panel">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+          <div>
+            <div class="section-label" style="margin-top:0;color:var(--success,#4ade80)">Allow Recipients</div>
+            <table class="list-table"><tbody id="wlRecipients"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="wlRcptInput" placeholder="admin@example.com">
+              <button class="btn btn-sm btn-primary" onclick="addEntry('allow','recipients','wlRcptInput')">Add</button>
+            </div>
+          </div>
+          <div>
+            <div class="section-label" style="margin-top:0;color:var(--danger,#f87171)">Block Recipients</div>
+            <table class="list-table"><tbody id="blRecipients"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="blRcptInput" placeholder="noreply@spam.com">
+              <button class="btn btn-sm btn-danger" onclick="addEntry('block','recipients','blRcptInput')">Add</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- DNSBL tab -->
     <div id="tab-dnsbl" class="tab-panel">
       <div class="form-panel">
@@ -125,14 +159,140 @@
       </div>
     </div>
 
+    <!-- SURBL Zones tab -->
+    <div id="tab-surbl" class="tab-panel">
+      <div class="form-panel">
+        <p style="margin:0 0 .6rem;font-size:.85rem;color:var(--muted)">SURBL/URIBL zones used to identify spam URLs in message bodies.</p>
+        <table class="dnsbl-table">
+          <thead><tr><th>Zone</th><th></th></tr></thead>
+          <tbody id="surblRows"></tbody>
+        </table>
+        <div style="margin-top:1rem;display:flex;gap:.4rem;align-items:center">
+          <input type="text" id="surblZoneInput" placeholder="multi.surbl.org" style="flex:2;min-width:180px">
+          <button class="btn btn-primary" onclick="addSurblZone()">Add Zone</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Config tab -->
     <div id="tab-config" class="tab-panel">
       <div class="form-panel">
-        <div class="section-label" style="margin-top:0">Check Configuration</div>
-        <div id="checkList"></div>
-        <div style="margin-top:1rem">
-          <button class="btn btn-secondary" onclick="reloadConfig()">Reload Config</button>
+        <div class="section-label" style="margin-top:0">Thresholds</div>
+        <div class="threshold-row">
+          <label>Possible spam threshold (%)</label>
+          <input type="number" id="cfgPossible" min="0" max="100" step="1" class="threshold-row input">
         </div>
+        <div class="threshold-row">
+          <label>Definite spam threshold (%)</label>
+          <input type="number" id="cfgDefinite" min="0" max="100" step="1" class="threshold-row input">
+        </div>
+        <div class="threshold-row">
+          <label>Max check duration (e.g. <code>30s</code>)</label>
+          <input type="text" id="cfgMaxDuration" placeholder="30s" style="width:6rem;font-size:.82rem">
+        </div>
+
+        <div class="section-label" style="margin-top:.8rem">Checks &amp; Weights</div>
+        <div id="checkList"></div>
+
+        <!-- Residential SPF sub-fields -->
+        <div id="resSPFExtra" style="margin-left:1.5rem;margin-top:.2rem;display:none;border-left:2px solid rgba(255,255,255,.08);padding-left:.8rem">
+          <div class="check-row">
+            <span class="check-name" style="color:var(--muted);font-size:.82rem">Reject residential IPs</span>
+            <input type="checkbox" id="ck_residential_spf_reject">
+          </div>
+          <div class="check-row">
+            <span class="check-name" style="color:var(--muted);font-size:.82rem">Check PBL (Policy Block List)</span>
+            <input type="checkbox" id="ck_residential_spf_pbl">
+          </div>
+          <div class="check-row">
+            <span class="check-name" style="color:var(--muted);font-size:.82rem">PBL Zone</span>
+            <input type="text" id="cw_residential_spf_pbl_zone" placeholder="pbl.spamhaus.org" style="width:15rem;font-size:.82rem">
+          </div>
+          <div class="check-row">
+            <span class="check-name" style="color:var(--muted);font-size:.82rem">SoftFail triggers residential check</span>
+            <input type="checkbox" id="ck_residential_spf_softfail">
+          </div>
+        </div>
+
+        <!-- Antivirus sub-fields -->
+        <div id="antivirusExtra" style="margin-left:1.5rem;margin-top:.2rem;display:none;border-left:2px solid rgba(255,255,255,.08);padding-left:.8rem">
+          <div class="check-row">
+            <span class="check-name" style="color:var(--muted);font-size:.82rem">Reject on virus detection</span>
+            <input type="checkbox" id="ck_antivirus_reject">
+          </div>
+          <div class="check-row">
+            <span class="check-name" style="color:var(--muted);font-size:.82rem">On scanner error</span>
+            <select id="cv_antivirus_error" style="font-size:.82rem">
+              <option value="pass">Pass (treat as clean)</option>
+              <option value="tempfail">Tempfail</option>
+              <option value="reject">Reject</option>
+            </select>
+          </div>
+          <div class="check-row">
+            <span class="check-name" style="color:var(--muted);font-size:.82rem">On scanner timeout</span>
+            <select id="cv_antivirus_timeout" style="font-size:.82rem">
+              <option value="pass">Pass</option>
+              <option value="tempfail">Tempfail</option>
+              <option value="reject">Reject</option>
+            </select>
+          </div>
+          <div style="margin-top:.6rem;font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)">Configured Scanners</div>
+          <table class="dnsbl-table" style="margin-top:.3rem">
+            <thead><tr>
+              <th>Name</th><th>Command</th><th>Timeout</th><th></th>
+            </tr></thead>
+            <tbody id="avScannerRows"></tbody>
+          </table>
+          <div style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:flex-end">
+            <div style="flex:1;min-width:80px">
+              <div style="font-size:.75rem;color:var(--muted);margin-bottom:.2rem">Name</div>
+              <input type="text" id="avScannerName" placeholder="clamav" style="width:100%;font-size:.82rem">
+            </div>
+            <div style="flex:3;min-width:160px">
+              <div style="font-size:.75rem;color:var(--muted);margin-bottom:.2rem">Command</div>
+              <input type="text" id="avScannerCmd" placeholder="clamdscan --no-summary -" style="width:100%;font-size:.82rem">
+            </div>
+            <div style="width:5rem">
+              <div style="font-size:.75rem;color:var(--muted);margin-bottom:.2rem">Timeout</div>
+              <input type="text" id="avScannerTimeout" placeholder="30s" style="width:100%;font-size:.82rem">
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="addScanner()">Add</button>
+          </div>
+          <div style="font-size:.74rem;color:var(--muted);margin-top:.25rem">Default exit codes: clean=0, virus=1, error=2,3.</div>
+        </div>
+
+        <div style="margin-top:1rem;display:flex;gap:.6rem;align-items:center">
+          <button class="btn btn-primary" onclick="saveChecks()">Save</button>
+          <span id="cfgOk"  style="color:var(--success,#4ade80);font-size:.82rem;display:none">Saved.</span>
+          <span id="cfgErr" style="color:var(--danger,#f87171);font-size:.82rem;display:none"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Domain Overrides tab -->
+    <div id="tab-overrides" class="tab-panel">
+      <div class="form-panel">
+        <p style="margin:0 0 .6rem;font-size:.85rem;color:var(--muted)">Per-sender-domain threshold overrides. Matched by the domain in the envelope From address.</p>
+        <table class="dnsbl-table" id="overridesTable">
+          <thead><tr><th>Domain</th><th>Possible spam %</th><th>Definite spam %</th><th></th></tr></thead>
+          <tbody id="overridesRows"></tbody>
+        </table>
+        <div style="margin-top:1rem;display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap">
+          <div class="form-group" style="margin:0;flex:2;min-width:140px">
+            <label>Domain</label>
+            <input type="text" id="ovDomain" placeholder="example.com">
+          </div>
+          <div class="form-group" style="margin:0;width:8rem">
+            <label>Possible spam %</label>
+            <input type="number" id="ovPossible" min="0" max="100" placeholder="60">
+          </div>
+          <div class="form-group" style="margin:0;width:8rem">
+            <label>Definite spam %</label>
+            <input type="number" id="ovDefinite" min="0" max="100" placeholder="90">
+          </div>
+          <button class="btn btn-primary" onclick="addOverride()">Add Override</button>
+        </div>
+        <div style="margin-top:.4rem"><span id="ovErr" style="color:var(--danger,#f87171);font-size:.82rem;display:none"></span></div>
       </div>
     </div>
 
@@ -143,19 +303,20 @@
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
 var FIELD_MAP = {
-  'allow': { 'ips': 'ip', 'senders': 'sender', 'domains': 'domain' },
-  'block': { 'ips': 'ip', 'senders': 'sender', 'domains': 'domain' },
+  'allow': { 'ips': 'ip', 'senders': 'sender', 'domains': 'domain', 'recipients': 'recipient' },
+  'block': { 'ips': 'ip', 'senders': 'sender', 'domains': 'domain', 'recipients': 'recipient' },
 };
 var TABLE_ID = {
-  allow: { ips: 'wlIps', senders: 'wlSenders', domains: 'wlDomains' },
-  block: { ips: 'blIps', senders: 'blSenders', domains: 'blDomains' },
+  allow: { ips: 'wlIps', senders: 'wlSenders', domains: 'wlDomains', recipients: 'wlRecipients' },
+  block: { ips: 'blIps', senders: 'blSenders', domains: 'blDomains', recipients: 'blRecipients' },
 };
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(function(t,i){ t.classList.remove('active'); });
   document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
-  var tabs = ['lists','dnsbl','config'];
-  document.querySelectorAll('.tab')[tabs.indexOf(name)].classList.add('active');
+  var tabs = ['lists','recipients','dnsbl','surbl','config','overrides'];
+  var idx = tabs.indexOf(name);
+  if (idx >= 0) document.querySelectorAll('.tab')[idx].classList.add('active');
   document.getElementById('tab-'+name).classList.add('active');
 }
 
@@ -174,7 +335,7 @@ function renderList(tbodyId, items, listType, subType) {
 
 function renderDnsbl(zones) {
   var tbody = document.getElementById('dnsblRows');
-  if (!zones || zones.length === 0) {
+  if (!zones || !zones.length) {
     tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);font-style:italic">No DNSBL zones configured</td></tr>';
     return;
   }
@@ -194,43 +355,248 @@ async function loadAll() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     var d = await r.json();
 
-    renderList('wlIps',     d.allow.ips,     'allow', 'ips');
-    renderList('wlSenders', d.allow.senders, 'allow', 'senders');
-    renderList('wlDomains', d.allow.domains, 'allow', 'domains');
-    renderList('blIps',     d.block.ips,     'block', 'ips');
-    renderList('blSenders', d.block.senders, 'block', 'senders');
-    renderList('blDomains', d.block.domains, 'block', 'domains');
+    renderList('wlIps',        d.allow.ips,        'allow', 'ips');
+    renderList('wlSenders',    d.allow.senders,    'allow', 'senders');
+    renderList('wlDomains',    d.allow.domains,    'allow', 'domains');
+    renderList('wlRecipients', d.allow.recipients, 'allow', 'recipients');
+    renderList('blIps',        d.block.ips,        'block', 'ips');
+    renderList('blSenders',    d.block.senders,    'block', 'senders');
+    renderList('blDomains',    d.block.domains,    'block', 'domains');
+    renderList('blRecipients', d.block.recipients, 'block', 'recipients');
     renderDnsbl(d.dnsbl_zones);
+    renderSurbl(d.surbl_zones || []);
   } catch(e) {
     document.getElementById('loadError').textContent = 'Failed to load: ' + e.message;
     document.getElementById('loadError').style.display = '';
   }
 }
 
+// Checks: key → display name. Special keys handled separately: residential_spf, antivirus
+var CHECK_NAMES = {
+  dnsbl: 'DNSBL (DNS Block Lists)', spf: 'SPF', dkim: 'DKIM Signature',
+  dmarc: 'DMARC Policy', rdns: 'Reverse DNS', helo: 'HELO/EHLO Validation',
+  early_talker: 'Early Talker Detection',
+  content: 'Content Analysis', url_analysis: 'URL/SURBL Analysis',
+  attachment: 'Attachment Scanning', html: 'HTML Analysis',
+  header_analysis: 'Header Analysis', charset: 'Charset Analysis',
+  bulk: 'Bulk Mail Detection', ratio: 'Text/HTML Ratio',
+  residential_spf: 'Residential IP + SPF (PBL)',
+  antivirus: 'Antivirus Scanning',
+};
+
 async function loadConfig() {
   try {
     var r = await fetch('/api/antispam/stats', {headers: authHeaders()});
     var d = await r.json();
-    var checkNames = {
-      dnsbl: 'DNSBL (DNS Block Lists)', spf: 'SPF', dkim: 'DKIM Signature',
-      dmarc: 'DMARC Policy', rdns: 'Reverse DNS', helo: 'HELO/EHLO Validation',
-      content: 'Content Analysis', url_analysis: 'URL/SURBL Analysis',
-      attachment: 'Attachment Scanning', html: 'HTML Analysis',
-    };
+    document.getElementById('asEnabled').checked  = d.enabled !== false;
+    document.getElementById('cfgPossible').value    = d.possible_spam_threshold != null ? d.possible_spam_threshold : 60;
+    document.getElementById('cfgDefinite').value    = d.definite_spam_threshold != null ? d.definite_spam_threshold : 90;
+    document.getElementById('cfgMaxDuration').value = d.max_check_duration || '';
     var checks = d.checks || {};
     var html = '';
-    Object.keys(checkNames).forEach(function(key) {
+    Object.keys(CHECK_NAMES).forEach(function(key) {
       var c = checks[key] || {};
-      var badge = c.enabled
-        ? '<span class="badge badge-green" style="font-size:.7rem">on</span>'
-        : '<span class="badge badge-gray" style="font-size:.7rem">off</span>';
-      html += '<div class="check-row">' + badge +
-        '<span class="check-name">' + esc(checkNames[key]) + '</span>' +
-        '<span class="check-weight">' + (c.weight != null ? 'weight: ' + c.weight : '') + '</span>' +
+      var enabled = c.enabled !== false;
+      var weight  = c.weight != null ? c.weight : '';
+      html += '<div class="check-row">' +
+        '<input type="checkbox" id="ck_' + key + '"' + (enabled ? ' checked' : '') + '>' +
+        '<span class="check-name">' + esc(CHECK_NAMES[key]) + '</span>' +
+        '<input type="number" id="cw_' + key + '" value="' + weight + '" min="0.1" max="20" step="0.1" class="check-weight-input" placeholder="weight">' +
         '</div>';
     });
     document.getElementById('checkList').innerHTML = html;
+
+    // Residential SPF sub-fields
+    var rspf = checks.residential_spf || {};
+    document.getElementById('ck_residential_spf_reject').checked   = !!rspf.reject;
+    document.getElementById('ck_residential_spf_pbl').checked      = rspf.check_pbl !== false;
+    document.getElementById('cw_residential_spf_pbl_zone').value   = rspf.pbl_zone || '';
+    document.getElementById('ck_residential_spf_softfail').checked = rspf.softfail_triggers !== false;
+    toggleResSPFExtra();
+
+    // Antivirus sub-fields
+    var av = checks.antivirus || {};
+    document.getElementById('ck_antivirus_reject').checked = !!av.reject_on_virus;
+    setSelect('cv_antivirus_error',   av.on_scanner_error   || 'pass');
+    setSelect('cv_antivirus_timeout', av.on_scanner_timeout || 'pass');
+    toggleAntivirusExtra();
+
+    // Bind toggles for showing sub-fields
+    var rspfCk = document.getElementById('ck_residential_spf');
+    if (rspfCk) rspfCk.addEventListener('change', toggleResSPFExtra);
+    var avCk = document.getElementById('ck_antivirus');
+    if (avCk) avCk.addEventListener('change', toggleAntivirusExtra);
+
+    // Load domain overrides and scanners
+    loadOverrides();
+    loadScanners();
   } catch(e) {}
+}
+
+function setSelect(id, val) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === val) { el.selectedIndex = i; return; }
+  }
+}
+
+function toggleResSPFExtra() {
+  var ck = document.getElementById('ck_residential_spf');
+  var extra = document.getElementById('resSPFExtra');
+  if (extra) extra.style.display = (ck && ck.checked) ? '' : 'none';
+}
+function toggleAntivirusExtra() {
+  var ck = document.getElementById('ck_antivirus');
+  var extra = document.getElementById('antivirusExtra');
+  if (extra) extra.style.display = (ck && ck.checked) ? '' : 'none';
+}
+
+function renderSurbl(zones) {
+  var tbody = document.getElementById('surblRows');
+  if (!zones || !zones.length) {
+    tbody.innerHTML = '<tr><td colspan="2" style="color:var(--muted);font-style:italic">No SURBL zones configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = zones.map(function(z) {
+    return '<tr><td><code>' + esc(z) + '</code></td>' +
+      '<td style="text-align:right"><button class="btn btn-sm btn-danger" onclick="removeSurblZone(\'' + esc(z) + '\')">Delete</button></td></tr>';
+  }).join('');
+}
+
+async function addSurblZone() {
+  var zone = document.getElementById('surblZoneInput').value.trim();
+  if (!zone) { alert('Zone is required'); return; }
+  try {
+    var r = await fetch('/api/antispam/surbl-zones', {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({zone: zone}),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    document.getElementById('surblZoneInput').value = '';
+    loadAll();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function removeSurblZone(zone) {
+  if (!confirm('Remove SURBL zone "' + zone + '"?')) return;
+  try {
+    var r = await fetch('/api/antispam/surbl-zones/' + encodeURIComponent(zone), {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    loadAll();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function saveEnabled() {
+  var enabled = document.getElementById('asEnabled').checked;
+  try {
+    await fetch('/api/antispam/checks', {
+      method: 'PUT', headers: authHeaders(),
+      body: JSON.stringify({enabled: enabled}),
+    });
+  } catch(e) {}
+}
+
+async function loadOverrides() {
+  try {
+    var r = await fetch('/api/antispam/domain-overrides', {headers: authHeaders()});
+    var d = await r.json();
+    renderOverrides(d.domain_overrides || []);
+  } catch(e) {}
+}
+
+function renderOverrides(rows) {
+  var tbody = document.getElementById('overridesRows');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);font-style:italic">No domain overrides</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(function(o) {
+    return '<tr>' +
+      '<td>' + esc(o.domain) + '</td>' +
+      '<td>' + (o.possible_spam_threshold != null ? o.possible_spam_threshold + '%' : '—') + '</td>' +
+      '<td>' + (o.definite_spam_threshold != null ? o.definite_spam_threshold + '%' : '—') + '</td>' +
+      '<td style="text-align:right"><button class="btn btn-sm btn-danger" onclick="removeOverride(\'' + esc(o.domain) + '\')">Delete</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function addOverride() {
+  var domain = document.getElementById('ovDomain').value.trim();
+  var errEl = document.getElementById('ovErr');
+  if (!domain) { errEl.textContent = 'Domain required'; errEl.style.display = ''; return; }
+  var possible = document.getElementById('ovPossible').value.trim();
+  var definite = document.getElementById('ovDefinite').value.trim();
+  var body = {domain: domain};
+  if (possible) body.possible_spam_threshold = parseInt(possible);
+  if (definite) body.definite_spam_threshold = parseInt(definite);
+  try {
+    var r = await fetch('/api/antispam/domain-overrides', {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify(body),
+    });
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Failed'; errEl.style.display = ''; return; }
+    errEl.style.display = 'none';
+    document.getElementById('ovDomain').value   = '';
+    document.getElementById('ovPossible').value = '';
+    document.getElementById('ovDefinite').value = '';
+    loadOverrides();
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+async function removeOverride(domain) {
+  if (!confirm('Remove override for "' + domain + '"?')) return;
+  try {
+    var r = await fetch('/api/antispam/domain-overrides/' + encodeURIComponent(domain), {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    loadOverrides();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function saveChecks() {
+  var body = {
+    possible_spam_threshold: parseInt(document.getElementById('cfgPossible').value, 10) || 60,
+    definite_spam_threshold: parseInt(document.getElementById('cfgDefinite').value, 10) || 90,
+  };
+  var dur = document.getElementById('cfgMaxDuration').value.trim();
+  if (dur) body.max_check_duration = dur;
+  Object.keys(CHECK_NAMES).forEach(function(key) {
+    var cb = document.getElementById('ck_' + key);
+    var wi = document.getElementById('cw_' + key);
+    if (cb || wi) {
+      body[key] = {};
+      if (cb) body[key].enabled = cb.checked;
+      if (wi && wi.value !== '') body[key].weight = parseFloat(wi.value);
+    }
+  });
+  // residential_spf sub-fields
+  if (!body.residential_spf) body.residential_spf = {};
+  body.residential_spf.reject          = document.getElementById('ck_residential_spf_reject').checked;
+  body.residential_spf.check_pbl       = document.getElementById('ck_residential_spf_pbl').checked;
+  body.residential_spf.softfail_triggers = document.getElementById('ck_residential_spf_softfail').checked;
+  var pblZone = document.getElementById('cw_residential_spf_pbl_zone').value.trim();
+  if (pblZone) body.residential_spf.pbl_zone = pblZone;
+  // antivirus sub-fields
+  if (!body.antivirus) body.antivirus = {};
+  body.antivirus.reject_on_virus    = document.getElementById('ck_antivirus_reject').checked;
+  body.antivirus.on_scanner_error   = document.getElementById('cv_antivirus_error').value;
+  body.antivirus.on_scanner_timeout = document.getElementById('cv_antivirus_timeout').value;
+  var okEl  = document.getElementById('cfgOk');
+  var errEl = document.getElementById('cfgErr');
+  okEl.style.display = 'none'; errEl.style.display = 'none';
+  try {
+    var r = await fetch('/api/antispam/checks', {method:'PUT', headers: authHeaders(), body: JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Save failed'; errEl.style.display = ''; return; }
+    okEl.style.display = '';
+    setTimeout(function(){ okEl.style.display = 'none'; }, 2000);
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
 }
 
 async function addEntry(listType, subType, inputId) {
@@ -300,13 +666,56 @@ async function removeDnsblZone(zone) {
   } catch(e) { alert('Request failed: ' + e.message); }
 }
 
-async function reloadConfig() {
+
+async function loadScanners() {
   try {
-    var r = await fetch('/api/reload', {method: 'POST', headers: authHeaders()});
+    var r = await fetch('/api/antispam/scanners', {headers: authHeaders()});
     var d = await r.json();
-    if (!r.ok) { alert(d.error || 'Reload failed'); return; }
-    alert('Configuration reloaded.');
+    renderScanners(d.scanners || []);
+  } catch(e) {}
+}
+function renderScanners(scanners) {
+  var tbody = document.getElementById('avScannerRows');
+  if (!tbody) return;
+  if (!scanners.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);font-style:italic">No scanners configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = scanners.map(function(s) {
+    return '<tr>' +
+      '<td><strong>' + esc(s.name) + '</strong></td>' +
+      '<td><code style="font-size:.8rem">' + esc(s.command) + '</code></td>' +
+      '<td>' + esc(s.timeout || '30s') + '</td>' +
+      '<td style="text-align:right"><button class="btn btn-sm btn-danger" onclick="removeScanner(\'' + esc(s.name) + '\')">Delete</button></td>' +
+      '</tr>';
+  }).join('');
+}
+async function addScanner() {
+  var name    = document.getElementById('avScannerName').value.trim();
+  var command = document.getElementById('avScannerCmd').value.trim();
+  var timeout = document.getElementById('avScannerTimeout').value.trim() || '30s';
+  if (!name || !command) { alert('Name and command are required'); return; }
+  var body = {name: name, command: command, timeout: timeout,
+    clean_exit_codes: [0], virus_exit_codes: [1], error_exit_codes: [2, 3],
+    virus_name_pattern: null};
+  try {
+    var r = await fetch('/api/antispam/scanners', {method:'POST', headers:authHeaders(), body:JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    document.getElementById('avScannerName').value    = '';
+    document.getElementById('avScannerCmd').value     = '';
+    document.getElementById('avScannerTimeout').value = '';
+    loadScanners();
   } catch(e) { alert('Request failed: ' + e.message); }
+}
+async function removeScanner(name) {
+  if (!confirm('Delete scanner "' + name + '"?')) return;
+  try {
+    var r = await fetch('/api/antispam/scanners/' + encodeURIComponent(name), {method:'DELETE', headers:authHeaders()});
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    loadScanners();
+  } catch(e) { alert('Request failed'); }
 }
 
 initPage('antispam');

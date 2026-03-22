@@ -147,6 +147,17 @@ impl SmtpSession {
             return Ok(());
         }
 
+        // TLS requirement: reject plain-text connections when require_tls is set.
+        if self.trusted_hosts.require_tls {
+            let (_, mut writer) = tokio::io::split(stream);
+            writer
+                .write_all(b"530 5.7.0 Must issue STARTTLS first\r\n")
+                .await?;
+            writer.flush().await?;
+            tracing::info!(peer = %self.peer_addr, "relay connection rejected: TLS required");
+            return Ok(());
+        }
+
         let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
 

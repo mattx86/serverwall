@@ -9,17 +9,21 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use serverwall_core::acl::{AclDecision, PathAcl};
-use serverwall_core::config::schema::{BalanceMethod, BotDetectionConfig, CookieSecurityConfig, FrontendConfig, ProtocolType, SecurityHeadersConfig};
+use serverwall_core::config::schema::{BalanceMethod, BotDetectionConfig, CookieSecurityConfig, FrontendConfig, LogFormat, ProtocolType, SecurityHeadersConfig};
+use serverwall_core::logging::ApacheLogFormatter;
 use serverwall_core::types::Backend;
 use serverwall_waf::engine::WafEngine;
 use serverwall_waf::rate_limit::{RateLimiter, RateLimitKey};
 use serverwall_waf::request::HttpRequestContext;
 
 use crate::pipeline::RequestPipeline;
+
+/// Shared async log writer: Mutex-guarded buffered file writer.
+type LogWriter = Arc<tokio::sync::Mutex<tokio::io::BufWriter<tokio::fs::File>>>;
 
 /// HTTP/HTTPS reverse proxy with header manipulation, WAF inspection, and routing.
 pub struct HttpProxy {
@@ -33,10 +37,19 @@ pub struct HttpProxy {
     hsts_include_subdomains: bool,
     rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>>,
     cookie_security: Arc<CookieSecurityConfig>,
+    log_writer: Option<LogWriter>,
+    log_format: LogFormat,
+    /// When true, IPs in the global allow list bypass WAF inspection.
+    acl_bypass_waf: bool,
+    /// Domains allowed in the Host header (empty = allow all).
+    domain_allow: Vec<String>,
+    /// Domains blocked in the Host header.
+    domain_block: Vec<String>,
 }
 
 impl HttpProxy {
     /// Create a new HTTP proxy.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         frontend_config: FrontendConfig,
         security_headers: SecurityHeadersConfig,
@@ -48,6 +61,11 @@ impl HttpProxy {
         hsts_include_subdomains: bool,
         rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>>,
         cookie_security: CookieSecurityConfig,
+        log_writer: Option<LogWriter>,
+        log_format: LogFormat,
+        acl_bypass_waf: bool,
+        domain_allow: Vec<String>,
+        domain_block: Vec<String>,
     ) -> Self {
         Self {
             waf,
@@ -60,6 +78,11 @@ impl HttpProxy {
             hsts_include_subdomains,
             rate_limiters,
             cookie_security: Arc::new(cookie_security),
+            log_writer,
+            log_format,
+            acl_bypass_waf,
+            domain_allow,
+            domain_block,
         }
     }
 
@@ -84,6 +107,11 @@ impl HttpProxy {
         let hsts_include_subdomains = self.hsts_include_subdomains;
         let rate_limiters = self.rate_limiters.clone();
         let cookie_security = self.cookie_security.clone();
+        let log_writer = self.log_writer.clone();
+        let log_format = self.log_format;
+        let acl_bypass_waf = self.acl_bypass_waf;
+        let domain_allow = self.domain_allow.clone();
+        let domain_block = self.domain_block.clone();
 
         let service = service_fn(move |req: Request<Incoming>| {
             let waf = waf.clone();
@@ -95,6 +123,9 @@ impl HttpProxy {
             let rate_limiters = rate_limiters.clone();
             let cookie_security = cookie_security.clone();
             let ja3 = ja3_fingerprint.clone();
+            let log_writer = log_writer.clone();
+            let domain_allow = domain_allow.clone();
+            let domain_block = domain_block.clone();
 
             async move {
                 handle_request(
@@ -111,6 +142,11 @@ impl HttpProxy {
                     rate_limiters,
                     cookie_security,
                     ja3,
+                    log_writer,
+                    log_format,
+                    acl_bypass_waf,
+                    domain_allow,
+                    domain_block,
                 )
                 .await
             }
@@ -160,6 +196,7 @@ const FINGERPRINT_HEADERS: &[&str] = &[
 ];
 
 /// Handle a single HTTP request: WAF check, select backend, forward, return response.
+#[allow(clippy::too_many_arguments)]
 async fn handle_request(
     req: Request<Incoming>,
     client_ip: IpAddr,
@@ -174,6 +211,11 @@ async fn handle_request(
     rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>>,
     cookie_security: Arc<CookieSecurityConfig>,
     ja3_fingerprint: Option<String>,
+    log_writer: Option<LogWriter>,
+    log_format: LogFormat,
+    acl_bypass_waf: bool,
+    domain_allow: Vec<String>,
+    domain_block: Vec<String>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().clone();
     let uri = req.uri().clone();
@@ -209,6 +251,23 @@ async fn handle_request(
         }
     }
 
+    // Domain ACL: check the Host header against allowed/blocked domain lists.
+    if !domain_allow.is_empty() || !domain_block.is_empty() {
+        let host = header_map.get("host")
+            .map(|h| h.split(':').next().unwrap_or(h).to_lowercase())
+            .unwrap_or_default();
+        if !host.is_empty() {
+            if domain_block.iter().any(|d| host == d.to_lowercase()) {
+                tracing::info!(client = %client_ip, host = %host, "request blocked by domain ACL (block list)");
+                return Ok(error_response(StatusCode::FORBIDDEN, "Forbidden"));
+            }
+            if !domain_allow.is_empty() && !domain_allow.iter().any(|d| host == d.to_lowercase()) {
+                tracing::info!(client = %client_ip, host = %host, "request blocked by domain ACL (not in allow list)");
+                return Ok(error_response(StatusCode::FORBIDDEN, "Forbidden"));
+            }
+        }
+    }
+
     // Bot detection: User-Agent and JA3 fingerprint checks.
     if bot_detection.enabled {
         let ua = header_map.get("user-agent").map(|s| s.as_str()).unwrap_or("");
@@ -239,9 +298,10 @@ async fn handle_request(
         }
     }
 
-    // WAF inspection
+    // WAF inspection (skipped if client IP is globally allowed and acl_bypass_waf is set)
+    let waf_bypassed = acl_bypass_waf && pipeline.is_globally_allowed(client_ip);
     if let Some(ref waf_engine) = waf {
-        if frontend_config.waf_enabled {
+        if frontend_config.waf_enabled && !waf_bypassed {
             let waf_ctx = HttpRequestContext::from_parts(
                 method.as_str(),
                 &uri.to_string(),
@@ -489,6 +549,7 @@ async fn handle_request(
         response = response.header("Strict-Transport-Security", hsts);
     }
 
+    let resp_body_len = resp_body.len() as u64;
     let final_response = match response.body(Full::new(resp_body)) {
         Ok(r) => r,
         Err(e) => {
@@ -500,7 +561,7 @@ async fn handle_request(
         }
     };
 
-    // Log the request
+    // Structured tracing log (always emitted)
     tracing::info!(
         client = %client_ip,
         method = %method,
@@ -512,6 +573,36 @@ async fn handle_request(
         ja3 = ja3_fingerprint.as_deref().unwrap_or("-"),
         "HTTP request processed",
     );
+
+    // Access log file (only when configured)
+    if let Some(ref writer) = log_writer {
+        let status = final_response.status().as_u16();
+        let bytes = resp_body_len;
+        let line = match log_format {
+            LogFormat::Json => {
+                format!(
+                    "{{\"time\":\"{}\",\"client\":\"{}\",\"method\":\"{}\",\"uri\":\"{}\",\"status\":{},\"bytes\":{},\"backend\":\"{}\"}}\n",
+                    chrono::Utc::now().to_rfc3339(),
+                    client_ip,
+                    method,
+                    uri,
+                    status,
+                    bytes,
+                    backend.tag,
+                )
+            }
+            _ => {
+                // Apache Combined format for ApacheCombined, ApacheCustom, and other variants
+                let formatter = ApacheLogFormatter::new();
+                let referer = parts.headers.get("referer").and_then(|v| v.to_str().ok());
+                let user_agent = header_map.get("user-agent").map(|s| s.as_str());
+                format!("{}\n", formatter.format(client_ip, method.as_str(), uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/"), status, bytes, referer, user_agent))
+            }
+        };
+        let mut w = writer.lock().await;
+        let _ = w.write_all(line.as_bytes()).await;
+        let _ = w.flush().await;
+    }
 
     Ok(final_response)
 }

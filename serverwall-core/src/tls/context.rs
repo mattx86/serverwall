@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use rustls::ServerConfig;
@@ -13,8 +14,16 @@ use crate::tls::CertStore;
 /// The `CertStore` must already have certificates loaded and registered before
 /// calling this function. It is wrapped in an `Arc` so it can be shared with
 /// the resulting `TlsAcceptor`.
-pub fn build_tls_acceptor(cert_store: Arc<CertStore>) -> Result<TlsAcceptor> {
-    let config = ServerConfig::builder()
+///
+/// `min_version` controls the minimum TLS version: `"1.3"` restricts to TLS
+/// 1.3 only; any other value (including the default `"1.2"`) allows both TLS
+/// 1.2 and TLS 1.3.
+pub fn build_tls_acceptor(cert_store: Arc<CertStore>, min_version: &str) -> Result<TlsAcceptor> {
+    let versions: &[&rustls::SupportedProtocolVersion] = match min_version {
+        "1.3" => &[&rustls::version::TLS13],
+        _     => &[&rustls::version::TLS13, &rustls::version::TLS12],
+    };
+    let config = ServerConfig::builder_with_protocol_versions(versions)
         .with_no_client_auth()
         .with_cert_resolver(cert_store);
 
@@ -24,14 +33,21 @@ pub fn build_tls_acceptor(cert_store: Arc<CertStore>) -> Result<TlsAcceptor> {
 /// Build a `TlsConnector` for outbound connections to backends.
 ///
 /// When `verify` is `true`, the connector validates the server certificate
-/// against the system root store. When `false`, certificate
-/// verification is skipped (useful for self-signed backend certs in trusted
-/// networks).
-pub fn build_tls_connector(verify: bool) -> Result<TlsConnector> {
+/// against the system root store (or a custom CA bundle when `ca_bundle` is
+/// provided). When `false`, certificate verification is skipped (useful for
+/// self-signed backend certs in trusted networks).
+pub fn build_tls_connector(verify: bool, ca_bundle: Option<&Path>) -> Result<TlsConnector> {
     let config = if verify {
         let mut root_store = rustls::RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs().certs {
-            root_store.add(cert).ok();
+        if let Some(bundle_path) = ca_bundle {
+            let pem = std::fs::read(bundle_path)?;
+            for cert in rustls_pemfile::certs(&mut pem.as_slice()).flatten() {
+                root_store.add(cert).ok();
+            }
+        } else {
+            for cert in rustls_native_certs::load_native_certs().certs {
+                root_store.add(cert).ok();
+            }
         }
         rustls::ClientConfig::builder()
             .with_root_certificates(root_store)

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - ACME Settings</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
+.toggle-row:last-of-type{border-bottom:none}
+.toggle-label{font-size:.88rem}
+.toggle-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
+.save-row{margin-top:1.2rem;display:flex;gap:.6rem;align-items:center}
+.save-ok{color:var(--success,#4ade80);font-size:.82rem;display:none}
+.save-err{color:var(--danger,#f87171);font-size:.82rem;display:none}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">ACME / Let's Encrypt Settings</h2>
+    </div>
+
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <div class="form-panel">
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">ACME Enabled</div>
+          <div class="toggle-sub">Enable automatic certificate issuance via ACME protocol</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="acmeEnabled"><span class="slider"></span></label>
+      </div>
+
+      <div class="form-grid" style="margin-top:1rem">
+        <div class="form-group">
+          <label>Contact Email</label>
+          <input type="email" id="acmeEmail" placeholder="admin@example.com">
+        </div>
+        <div class="form-group">
+          <label>Challenge Type</label>
+          <select id="acmeChallengeType">
+            <option value="http01">HTTP-01 (port 80)</option>
+            <option value="dns01">DNS-01</option>
+            <option value="tlsalpn01">TLS-ALPN-01</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Directory URL</label>
+          <input type="url" id="acmeDir" placeholder="https://acme-v02.api.letsencrypt.org/directory">
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.25rem">Leave blank to use Let's Encrypt production. Use staging URL for testing.</div>
+        </div>
+        <div class="form-group">
+          <label>Storage Directory</label>
+          <input type="text" id="acmeStorage" placeholder="/opt/serverwall/etc/acme">
+        </div>
+        <div class="form-group">
+          <label>Renew Before Expiry (days)</label>
+          <input type="number" id="acmeRenewDays" min="1" max="90" placeholder="30">
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Auto-Renew</div>
+          <div class="toggle-sub">Automatically renew certificates before they expire</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="acmeAutoRenew"><span class="slider"></span></label>
+      </div>
+
+      <div class="save-row">
+        <button class="btn btn-primary" onclick="save()">Save Settings</button>
+        <span class="save-ok" id="saveOk">Saved.</span>
+        <span class="save-err" id="saveErr"></span>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function setSelect(id, val) {
+  var el = document.getElementById(id);
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === val) { el.selectedIndex = i; return; }
+  }
+}
+
+async function load() {
+  try {
+    var r = await fetch('/api/settings/acme', {headers: authHeaders()});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var d = await r.json();
+    document.getElementById('acmeEnabled').checked  = !!d.enabled;
+    document.getElementById('acmeEmail').value       = d.email || '';
+    document.getElementById('acmeDir').value         = d.directory_url || '';
+    setSelect('acmeChallengeType', d.challenge_type || 'http01');
+    document.getElementById('acmeStorage').value     = d.storage_dir || '';
+    document.getElementById('acmeAutoRenew').checked = !!d.auto_renew;
+    document.getElementById('acmeRenewDays').value   = d.renew_before_days != null ? d.renew_before_days : 30;
+  } catch(e) {
+    document.getElementById('loadError').textContent = 'Failed to load: ' + e.message;
+    document.getElementById('loadError').style.display = '';
+  }
+}
+
+async function save() {
+  var okEl  = document.getElementById('saveOk');
+  var errEl = document.getElementById('saveErr');
+  okEl.style.display = 'none'; errEl.style.display = 'none';
+
+  var dirVal     = document.getElementById('acmeDir').value.trim();
+  var storageVal = document.getElementById('acmeStorage').value.trim();
+  var emailVal   = document.getElementById('acmeEmail').value.trim();
+
+  var body = {
+    enabled:           document.getElementById('acmeEnabled').checked,
+    email:             emailVal || null,
+    directory_url:     dirVal || null,
+    challenge_type:    document.getElementById('acmeChallengeType').value,
+    storage_dir:       storageVal || null,
+    auto_renew:        document.getElementById('acmeAutoRenew').checked,
+    renew_before_days: parseInt(document.getElementById('acmeRenewDays').value) || 30,
+  };
+
+  try {
+    var r = await fetch('/api/settings/acme', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Save failed'; errEl.style.display = ''; return; }
+    okEl.style.display = '';
+    setTimeout(function(){ okEl.style.display = 'none'; }, 2500);
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+initPage('acme-settings');
+load();
+</script>
+</body>
+</html>

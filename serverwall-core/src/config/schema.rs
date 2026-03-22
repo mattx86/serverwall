@@ -17,6 +17,12 @@ pub struct ServerWallConfig {
     #[serde(default)]
     pub waf_ruleset: Vec<WafRulesetConfig>,
     #[serde(default)]
+    pub security_profiles: Vec<SecurityProfile>,
+    #[serde(default)]
+    pub tls_profiles: Vec<TlsProfile>,
+    #[serde(default)]
+    pub log_profiles: Vec<LogProfile>,
+    #[serde(default)]
     pub security: SecurityConfig,
     #[serde(default)]
     pub antispam: AntispamConfig,
@@ -132,6 +138,10 @@ pub struct FrontendConfig {
     pub waf_enabled: bool,
     #[serde(default)]
     pub waf_ruleset: Option<String>,
+    #[serde(default)]
+    pub security_profile: Option<String>,
+    #[serde(default)]
+    pub tls_profile: Option<String>,
 
     // Logging
     #[serde(default)]
@@ -140,6 +150,8 @@ pub struct FrontendConfig {
     pub log_format: LogFormat,
     #[serde(default = "default_true")]
     pub access_log: bool,
+    #[serde(default)]
+    pub log_profile: Option<String>,
 
     // Headers (HTTP/SMTP)
     #[serde(default)]
@@ -395,7 +407,7 @@ pub struct RateLimitScope {
 pub struct GeoConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default = "default_geoip_db_path")]
     pub database_path: Option<PathBuf>,
     #[serde(default)]
     pub block_countries: Vec<String>,
@@ -443,6 +455,89 @@ pub struct SecurityHeadersConfig {
     pub remove_server_header: bool,
     #[serde(default = "default_true")]
     pub remove_x_powered_by: bool,
+}
+
+/// A named bundle of per-frontend security overrides.
+///
+/// When a frontend references a security profile, the profile's settings
+/// take precedence over the global `[security]` configuration for that frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityProfile {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Protocol type this profile is designed for: `"HTTP"`, `"SMTP"`, `"IMAP"`, or `"TCP"`.
+    /// Used by the UI to show/hide relevant settings tabs. Defaults to `"HTTP"`.
+    #[serde(default = "default_profile_type")]
+    pub profile_type: String,
+    #[serde(default)]
+    pub waf_enabled: bool,
+    #[serde(default)]
+    pub waf_ruleset: Option<String>,
+    #[serde(default)]
+    pub headers: SecurityHeadersConfig,
+    #[serde(default)]
+    pub cookies: CookieSecurityConfig,
+    #[serde(default)]
+    pub bot_detection: BotDetectionConfig,
+    #[serde(default)]
+    pub geo: GeoConfig,
+    /// Antispam and antivirus settings for SMTP/SMTPS frontends using this profile.
+    /// `None` means SMTP frontends fall back to the global `[antispam]` configuration.
+    #[serde(default)]
+    pub antispam: Option<SecurityProfileAntispam>,
+}
+
+/// Antispam and antivirus overrides for SMTP frontends that reference this security profile.
+/// Fields that are `None` (thresholds) fall back to the global antispam configuration.
+/// The `antivirus` field completely replaces the global antivirus config when this section is set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecurityProfileAntispam {
+    /// Whether antispam filtering is active for SMTP frontends using this profile.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Override the possible-spam threshold (0–100). `None` = use global.
+    #[serde(default)]
+    pub possible_spam_threshold: Option<u8>,
+    /// Override the definite-spam threshold (0–100). `None` = use global.
+    #[serde(default)]
+    pub definite_spam_threshold: Option<u8>,
+    /// Antivirus scanner configuration for this profile.
+    /// Replaces the global antivirus config entirely when this antispam section is present.
+    #[serde(default)]
+    pub antivirus: AntivirusConfig,
+}
+
+/// Named TLS policy profile — groups min version, cipher suites, HSTS, and OCSP
+/// settings so they can be shared across multiple frontends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsProfile {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_tls_min_version")]
+    pub min_version: String,
+    #[serde(default)]
+    pub cipher_suites: Vec<String>,
+    #[serde(default)]
+    pub hsts_max_age: Option<u64>,
+    #[serde(default)]
+    pub hsts_include_subdomains: bool,
+    #[serde(default)]
+    pub ocsp_stapling: bool,
+}
+
+/// Named logging profile — groups log format and access-log toggle so they
+/// can be shared across multiple frontends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogProfile {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_log_format")]
+    pub format: LogFormat,
+    #[serde(default = "default_true")]
+    pub access_log: bool,
 }
 
 // =============================================================================
@@ -519,12 +614,16 @@ pub struct AntispamListConfig {
     pub recipients: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckWeightConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "default_check_weight")]
     pub weight: f64,
+}
+
+impl Default for CheckWeightConfig {
+    fn default() -> Self { Self { enabled: true, weight: default_check_weight() } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -566,7 +665,7 @@ impl Default for ResidentialSenderConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsblConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -574,8 +673,29 @@ pub struct DnsblConfig {
     pub weight: f64,
     #[serde(default = "default_dnsbl_timeout")]
     pub timeout: String,
-    #[serde(default)]
+    #[serde(default = "default_dnsbl_lists")]
     pub lists: Vec<DnsblListEntry>,
+}
+
+impl Default for DnsblConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            weight: default_dnsbl_weight(),
+            timeout: default_dnsbl_timeout(),
+            lists: default_dnsbl_lists(),
+        }
+    }
+}
+
+fn default_dnsbl_lists() -> Vec<DnsblListEntry> {
+    vec![
+        DnsblListEntry { zone: "zen.spamhaus.org".into(),      weight_multiplier: 2.0, reject_on_hit: true  },
+        DnsblListEntry { zone: "bl.spamcop.net".into(),        weight_multiplier: 1.0, reject_on_hit: false },
+        DnsblListEntry { zone: "b.barracudacentral.org".into(),weight_multiplier: 1.0, reject_on_hit: false },
+        DnsblListEntry { zone: "psbl.surriel.com".into(),      weight_multiplier: 0.8, reject_on_hit: false },
+        DnsblListEntry { zone: "dnsbl.sorbs.net".into(),       weight_multiplier: 0.8, reject_on_hit: false },
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -587,7 +707,7 @@ pub struct DnsblListEntry {
     pub reject_on_hit: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpfConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -595,6 +715,10 @@ pub struct SpfConfig {
     pub weight: f64,
     #[serde(default)]
     pub severity: SpfSeverityConfig,
+}
+
+impl Default for SpfConfig {
+    fn default() -> Self { Self { enabled: true, weight: default_spf_weight(), severity: SpfSeverityConfig::default() } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -631,7 +755,7 @@ pub struct SmtpRateRule {
     pub window: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DmarcConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -641,7 +765,11 @@ pub struct DmarcConfig {
     pub honor_reject_policy: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+impl Default for DmarcConfig {
+    fn default() -> Self { Self { enabled: true, weight: default_dmarc_weight(), honor_reject_policy: true } }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContentCheckConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -651,7 +779,11 @@ pub struct ContentCheckConfig {
     pub rules_file: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+impl Default for ContentCheckConfig {
+    fn default() -> Self { Self { enabled: true, weight: default_content_weight(), rules_file: None } }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UrlAnalysisConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -661,7 +793,11 @@ pub struct UrlAnalysisConfig {
     pub surbl_zones: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+impl Default for UrlAnalysisConfig {
+    fn default() -> Self { Self { enabled: true, weight: default_url_weight(), surbl_zones: Vec::new() } }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttachmentConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -669,6 +805,10 @@ pub struct AttachmentConfig {
     pub weight: f64,
     #[serde(default = "default_dangerous_extensions")]
     pub dangerous_extensions: Vec<String>,
+}
+
+impl Default for AttachmentConfig {
+    fn default() -> Self { Self { enabled: true, weight: default_attachment_weight(), dangerous_extensions: default_dangerous_extensions() } }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -962,6 +1102,7 @@ fn default_session_cookie() -> String { "_s".into() }
 fn default_log_format() -> LogFormat { LogFormat::ApacheCombined }
 fn default_acl_action() -> AclDefaultAction { AclDefaultAction::Allow }
 fn default_true() -> bool { true }
+fn default_profile_type() -> String { "HTTP".to_string() }
 fn default_weight() -> u32 { 1 }
 fn default_health_interval() -> String { "10s".into() }
 fn default_health_timeout() -> String { "3s".into() }
@@ -981,6 +1122,9 @@ fn default_check_duration() -> String { "10s".into() }
 fn default_check_weight() -> f64 { 3.0 }
 fn default_dnsbl_weight() -> f64 { 8.0 }
 fn default_dnsbl_timeout() -> String { "5s".into() }
+fn default_geoip_db_path() -> Option<PathBuf> {
+    Some(PathBuf::from("/opt/serverwall/lib/geoip/dbip-country-lite.mmdb"))
+}
 fn default_residential_weight() -> f64 { 10.0 }
 fn default_pbl_zone() -> String { "pbl.spamhaus.org".into() }
 fn default_one_f64() -> f64 { 1.0 }
@@ -1083,6 +1227,9 @@ impl Default for ServerWallConfig {
             frontend: Vec::new(),
             backend_pool: Vec::new(),
             waf_ruleset: Vec::new(),
+            security_profiles: Vec::new(),
+            tls_profiles: Vec::new(),
+            log_profiles: Vec::new(),
             security: SecurityConfig::default(),
             antispam: AntispamConfig::default(),
             relay: RelayConfig::default(),

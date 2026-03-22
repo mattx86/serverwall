@@ -7,6 +7,8 @@ use serverwall_core::config::schema::TrustedHostsConfig;
 pub struct TrustedHosts {
     networks: Vec<IpNetwork>,
     single_ips: Vec<IpAddr>,
+    /// When true, plain-text connections from trusted hosts are rejected with 530.
+    pub require_tls: bool,
 }
 
 impl TrustedHosts {
@@ -27,7 +29,7 @@ impl TrustedHosts {
             }
         }
 
-        Self { networks, single_ips }
+        Self { networks, single_ips, require_tls: config.require_tls }
     }
 
     /// Check whether the given IP address is in the allowlist.

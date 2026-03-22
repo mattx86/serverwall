@@ -1,24 +1,32 @@
 # Runtime image — copies release binaries from the pre-built serverwall-release image.
-# Requires: docker compose --profile release build release (already done)
+# Requires: docker build -t serverwall-release -f Dockerfile.release . (already done)
 # No Rust compilation needed.
 
 FROM serverwall-release AS binaries
 
-FROM ubuntu:24.04
+FROM rockylinux:8
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
+RUN dnf install -y \
     ca-certificates \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+    curl \
+    gzip \
+    openssl-libs \
+    && dnf clean all
 
-RUN groupadd -r serverwall && useradd -r -g serverwall -s /usr/sbin/nologin serverwall \
+RUN groupadd -r serverwall && useradd -r -g serverwall -s /sbin/nologin serverwall \
     && mkdir -p /opt/serverwall/bin \
     && mkdir -p /opt/serverwall/etc/{certs,dkim,acme} \
     && mkdir -p /opt/serverwall/var/{log,lib,spool} \
     && mkdir -p /opt/serverwall/run \
+    && mkdir -p /opt/serverwall/lib/geoip \
     && chown -R serverwall:serverwall /opt/serverwall
+
+# Download DB-IP Lite country database (CC BY 4.0 — free redistribution with attribution).
+# See THIRD_PARTY_NOTICES for full attribution details.
+RUN YEAR=$(date +%Y); MONTH=$(date +%m); \
+    curl -fsSL "https://download.db-ip.com/free/dbip-country-lite-${YEAR}-${MONTH}.mmdb.gz" \
+    | gunzip > /opt/serverwall/lib/geoip/dbip-country-lite.mmdb \
+    && chown serverwall:serverwall /opt/serverwall/lib/geoip/dbip-country-lite.mmdb
 
 COPY --from=binaries /package/bin/serverwall        /opt/serverwall/bin/serverwall
 COPY --from=binaries /package/bin/serverwall-webui  /opt/serverwall/bin/serverwall-webui

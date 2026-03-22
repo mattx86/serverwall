@@ -1,0 +1,21 @@
+Third-Party Components Included in ServerWall
+==============================================
+
+-------------------------------------------------------------------------------
+DB-IP Lite — GeoIP Country Database
+-------------------------------------------------------------------------------
+
+  File:    lib/geoip/dbip-country-lite.mmdb
+  Source:  https://db-ip.com
+  License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+           https://creativecommons.org/licenses/by/4.0/
+
+  This product includes IP geolocation data created by DB-IP
+  (https://db-ip.com), licensed under the Creative Commons Attribution 4.0
+  International License.  The database is updated monthly and is included
+  here to provide GeoIP-based access control without requiring a separate
+  download or API key.
+
+  Required attribution: "IP Geolocation by DB-IP" (https://db-ip.com)
+
+-------------------------------------------------------------------------------

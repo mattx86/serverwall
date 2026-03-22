@@ -1,15 +1,15 @@
-FROM ubuntu:24.04 AS builder
+FROM rockylinux:8 AS builder
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
+RUN dnf install -y \
     curl \
-    pkg-config \
-    libssl-dev \
+    pkgconf-pkg-config \
+    openssl-devel \
     cmake \
     perl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    gcc \
+    gcc-c++ \
+    make \
+    && dnf clean all
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain 1.88.0 --profile minimal
@@ -49,17 +49,15 @@ RUN find . -name "*.rs" -exec touch {} +
 RUN cargo build
 
 # Runtime image
-FROM ubuntu:24.04 AS runtime
+FROM rockylinux:8 AS runtime
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
+RUN dnf install -y \
     ca-certificates \
-    libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+    openssl-libs \
+    && dnf clean all
 
 # Create serverwall user and directory structure
-RUN groupadd -r serverwall && useradd -r -g serverwall -s /usr/sbin/nologin serverwall \
+RUN groupadd -r serverwall && useradd -r -g serverwall -s /sbin/nologin serverwall \
     && mkdir -p /opt/serverwall/bin \
     && mkdir -p /opt/serverwall/etc/{certs,dkim,acme} \
     && mkdir -p /opt/serverwall/var/{log,lib,spool} \

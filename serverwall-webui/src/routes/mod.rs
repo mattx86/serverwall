@@ -14,6 +14,12 @@ pub mod queue;
 pub mod antispam;
 pub mod system;
 pub mod security_settings;
+pub mod security_profiles;
+pub mod tls_profiles;
+pub mod log_profiles;
+pub mod relay;
+pub mod global_settings;
+pub mod acme_settings;
 
 use axum::{
     extract::{Request, State},
@@ -74,6 +80,8 @@ pub fn build_router(state: AppState) -> Router {
             "/api/backends/{pool}",
             get(backends::get).put(backends::update).delete(backends::delete),
         )
+        .route("/api/backends/{pool}/servers", post(backends::add_server))
+        .route("/api/backends/{pool}/servers/{name}", axum::routing::delete(backends::remove_server))
         // Queue (full CRUD)
         .route("/api/queue", get(queue::list))
         .route("/api/queue/stats", get(queue::stats))
@@ -110,6 +118,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Antispam
         .route("/api/antispam/stats", get(antispam::stats))
+        .route("/api/antispam/checks", axum::routing::put(antispam::update_checks))
         .route("/api/antispam/lists", get(antispam::list_entries))
         // Antispam allow list
         .route("/api/antispam/allow/ips", post(antispam::allow_add_ip))
@@ -125,9 +134,23 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/antispam/block/senders/{sender}", axum::routing::delete(antispam::block_remove_sender))
         .route("/api/antispam/block/domains", post(antispam::block_add_domain))
         .route("/api/antispam/block/domains/{domain}", axum::routing::delete(antispam::block_remove_domain))
+        .route("/api/antispam/block/recipients", post(antispam::block_add_recipient))
+        .route("/api/antispam/block/recipients/{recipient}", axum::routing::delete(antispam::block_remove_recipient))
+        // Antispam allow recipients
+        .route("/api/antispam/allow/recipients", post(antispam::allow_add_recipient))
+        .route("/api/antispam/allow/recipients/{recipient}", axum::routing::delete(antispam::allow_remove_recipient))
         // DNSBL zones
         .route("/api/antispam/dnsbl", post(antispam::dnsbl_add))
         .route("/api/antispam/dnsbl/{zone}", axum::routing::delete(antispam::dnsbl_remove))
+        // Antispam domain overrides
+        .route("/api/antispam/domain-overrides", get(antispam::domain_overrides_list).post(antispam::domain_overrides_create))
+        .route("/api/antispam/domain-overrides/{domain}", axum::routing::put(antispam::domain_overrides_update).delete(antispam::domain_overrides_delete))
+        // SURBL zones
+        .route("/api/antispam/surbl-zones", post(antispam::surbl_add))
+        .route("/api/antispam/surbl-zones/{zone}", axum::routing::delete(antispam::surbl_remove))
+        // Antivirus scanners
+        .route("/api/antispam/scanners", get(antispam::scanner_list).post(antispam::scanner_add))
+        .route("/api/antispam/scanners/{name}", axum::routing::delete(antispam::scanner_remove))
         // Reload
         .route("/api/reload", post(reload::reload))
         // Logs
@@ -144,6 +167,21 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/waf", get(waf::list).post(waf::create))
         .route("/api/waf/{name}", get(waf::get).put(waf::update).delete(waf::delete))
         .route("/api/waf/{name}/clone", post(waf::clone_ruleset))
+        // Security profiles
+        .route("/api/security-profiles", get(security_profiles::list).post(security_profiles::create))
+        .route("/api/security-profiles/{name}", get(security_profiles::get)
+            .put(security_profiles::update)
+            .delete(security_profiles::delete))
+        // TLS profiles
+        .route("/api/tls-profiles", get(tls_profiles::list).post(tls_profiles::create))
+        .route("/api/tls-profiles/{name}", get(tls_profiles::get)
+            .put(tls_profiles::update)
+            .delete(tls_profiles::delete))
+        // Logging profiles
+        .route("/api/log-profiles", get(log_profiles::list).post(log_profiles::create))
+        .route("/api/log-profiles/{name}", get(log_profiles::get)
+            .put(log_profiles::update)
+            .delete(log_profiles::delete))
         // Security settings
         .route("/api/security", get(security_settings::get))
         .route("/api/security/tls", axum::routing::put(security_settings::put_tls))
@@ -153,6 +191,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/security/cookies", axum::routing::put(security_settings::put_cookies))
         .route("/api/security/rate-limits", post(security_settings::add_rate_limit))
         .route("/api/security/rate-limits/{name}", axum::routing::delete(security_settings::remove_rate_limit))
+        // Relay
+        .route("/api/relay", get(relay::get).put(relay::update))
+        .route("/api/relay/trusted-hosts", post(relay::trusted_host_add))
+        .route("/api/relay/trusted-hosts/{host}", axum::routing::delete(relay::trusted_host_remove))
+        // Global and ACME settings
+        .route("/api/settings/global", get(global_settings::get).put(global_settings::update))
+        .route("/api/settings/acme", get(acme_settings::get).put(acme_settings::update))
         // System
         .route("/api/system/webui-cert", post(system::set_webui_cert))
         .route_layer(axum_middleware::from_fn_with_state(

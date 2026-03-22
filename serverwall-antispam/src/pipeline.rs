@@ -190,8 +190,21 @@ impl AntispamPipeline {
             }
         }
 
-        let suspect_threshold = self.config.possible_spam_threshold as f64;
-        let spam_threshold = self.config.definite_spam_threshold as f64;
+        // Apply per-domain threshold overrides if configured.
+        let sender_domain = ctx.envelope.mail_from
+            .rsplit('@')
+            .next()
+            .unwrap_or("")
+            .to_lowercase();
+        let domain_override = self.config.domain_overrides
+            .iter()
+            .find(|o| o.domain.to_lowercase() == sender_domain);
+        let suspect_threshold = domain_override
+            .and_then(|o| o.possible_spam_threshold)
+            .unwrap_or(self.config.possible_spam_threshold) as f64;
+        let spam_threshold = domain_override
+            .and_then(|o| o.definite_spam_threshold)
+            .unwrap_or(self.config.definite_spam_threshold) as f64;
         let verdict = score.verdict(DEFAULT_MAX_SCORE, suspect_threshold, spam_threshold);
 
         Ok(SpamReport {

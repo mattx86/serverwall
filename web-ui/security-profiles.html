@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Security Profiles</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1rem}
+.tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
+.tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
+.toggle-row:last-of-type{border-bottom:none}
+.toggle-label{font-size:.88rem}
+.toggle-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
+.tag-list{display:flex;flex-wrap:wrap;gap:.35rem;margin:.4rem 0}
+.tag{display:inline-flex;align-items:center;gap:.3rem;background:rgba(255,255,255,.07);border-radius:3px;padding:.18rem .45rem;font-size:.8rem}
+.tag button{background:none;border:none;color:var(--muted);cursor:pointer;padding:0;line-height:1;font-size:.85rem}
+.tag button:hover{color:var(--danger,#f87171)}
+.add-inline{display:flex;gap:.4rem;margin-top:.4rem}
+.add-inline input{flex:1}
+.section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:.8rem 0 .3rem}
+.save-row{margin-top:1.2rem;display:flex;gap:.6rem;align-items:center}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+
+    <div class="toolbar" id="spToolbar">
+      <h2 style="margin:0;flex:1">Security Profiles</h2>
+      <button class="btn btn-primary" id="addSpBtn" onclick="showAddForm()">+ Add Profile</button>
+    </div>
+
+    <!-- Add / Edit form -->
+    <div id="spForm" class="form-panel" style="display:none">
+      <h3 id="spFormTitle">Add Security Profile</h3>
+      <input type="hidden" id="spOrigName">
+
+      <div class="tabs" id="spTabs">
+        <div class="tab active" onclick="spTab('general')">General</div>
+        <div class="tab" onclick="spTab('headers')">HTTP Headers</div>
+        <div class="tab" onclick="spTab('cookies')">Cookies</div>
+        <div class="tab" onclick="spTab('bot')">Bot Detection</div>
+        <div class="tab" onclick="spTab('geo')">GeoIP</div>
+        <div class="tab" onclick="spTab('antispam')">Antispam (SMTP)</div>
+      </div>
+
+      <!-- General -->
+      <div id="sptab-general" class="tab-panel active">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Name *</label>
+            <input type="text" id="spName" placeholder="e.g. strict-api">
+          </div>
+          <div class="form-group">
+            <label>Profile Type</label>
+            <select id="spProfileType" onchange="onProfileTypeChange()">
+              <option value="HTTP">HTTP / HTTPS</option>
+              <option value="SMTP">SMTP / SMTPS</option>
+              <option value="IMAP">IMAP / IMAPS</option>
+              <option value="TCP">TCP (generic)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input type="text" id="spDesc" placeholder="Brief description">
+          </div>
+          <div class="form-group" id="spWafRulesetGroup">
+            <label>WAF Ruleset</label>
+            <select id="spWafRuleset"><option value="">— none —</option></select>
+          </div>
+        </div>
+        <div class="toggle-row" id="spWafEnabledRow">
+          <div>
+            <div class="toggle-label">WAF Enabled</div>
+            <div class="toggle-sub">Enable Web Application Firewall for frontends using this profile</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spWafEnabled"><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <!-- HTTP Headers -->
+      <div id="sptab-headers" class="tab-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">X-Content-Type-Options: nosniff</div>
+            <div class="toggle-sub">Prevent MIME-type sniffing</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spHdrXcto"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Remove Server Header</div>
+            <div class="toggle-sub">Strip the Server: header from responses</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spHdrRmServer" checked><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Remove X-Powered-By Header</div>
+            <div class="toggle-sub">Strip X-Powered-By: from responses</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spHdrRmXpb" checked><span class="slider"></span></label>
+        </div>
+        <div class="form-grid" style="margin-top:1rem">
+          <div class="form-group">
+            <label>X-Frame-Options</label>
+            <select id="spHdrXfo">
+              <option value="">— none —</option>
+              <option value="DENY">DENY</option>
+              <option value="SAMEORIGIN">SAMEORIGIN</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Referrer-Policy</label>
+            <select id="spHdrReferer">
+              <option value="">— none —</option>
+              <option value="no-referrer">no-referrer</option>
+              <option value="no-referrer-when-downgrade">no-referrer-when-downgrade</option>
+              <option value="same-origin">same-origin</option>
+              <option value="strict-origin">strict-origin</option>
+              <option value="strict-origin-when-cross-origin">strict-origin-when-cross-origin</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Content-Security-Policy</label>
+          <textarea id="spHdrCsp" rows="3" placeholder="default-src 'self'; script-src 'self'" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem"></textarea>
+        </div>
+      </div>
+
+      <!-- Cookies -->
+      <div id="sptab-cookies" class="tab-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Enforce Secure Flag</div>
+            <div class="toggle-sub">Add Secure attribute to all Set-Cookie headers</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spCkSecure"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Enforce HttpOnly Flag</div>
+            <div class="toggle-sub">Add HttpOnly attribute to all cookies</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spCkHttpOnly"><span class="slider"></span></label>
+        </div>
+        <div class="form-grid" style="margin-top:.8rem">
+          <div class="form-group">
+            <label>Enforce SameSite</label>
+            <select id="spCkSameSite">
+              <option value="">— none —</option>
+              <option value="Strict">Strict</option>
+              <option value="Lax">Lax</option>
+              <option value="None">None</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Max Cookie Size (bytes, 0 = unlimited)</label>
+            <input type="number" id="spCkMaxSize" min="0" value="4096">
+          </div>
+        </div>
+      </div>
+
+      <!-- Bot Detection -->
+      <div id="sptab-bot" class="tab-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Bot Detection Enabled</div>
+            <div class="toggle-sub">Enable bot filtering for frontends using this profile</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spBotEnabled"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Challenge Suspicious Bots</div>
+            <div class="toggle-sub">Return 429 to suspicious (unverified) bot traffic</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spBotChallenge"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Verify Good Bots via rDNS</div>
+            <div class="toggle-sub">Confirm Google, Bing etc. via reverse DNS lookup</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spBotVerify"><span class="slider"></span></label>
+        </div>
+        <div style="margin-top:1rem">
+          <div class="section-label" style="margin-top:0">Known-Good Bots (bypass bad-bot check)</div>
+          <div class="tag-list" id="spBotGoodList"></div>
+          <div class="add-inline">
+            <input type="text" id="spBotGoodInput" placeholder="googlebot">
+            <button class="btn btn-sm btn-primary" onclick="spAddTag('spBotGoodList','spBotGoodInput',spBotGoodBots)">Add</button>
+          </div>
+        </div>
+        <div style="margin-top:1rem">
+          <div class="section-label" style="margin-top:0">JA3 Fingerprint Block List</div>
+          <div class="tag-list" id="spJa3List"></div>
+          <div class="add-inline">
+            <input type="text" id="spJa3Input" placeholder="deadbeef...">
+            <button class="btn btn-sm btn-danger" onclick="spAddTag('spJa3List','spJa3Input',spJa3Fingerprints)">Add</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- GeoIP -->
+      <div id="sptab-geo" class="tab-panel">
+        <div class="toggle-row" style="margin-bottom:.8rem">
+          <div>
+            <div class="toggle-label">GeoIP Enabled</div>
+            <div class="toggle-sub">Enable country-based IP filtering for frontends using this profile</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spGeoEnabled"><span class="slider"></span></label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+          <div>
+            <div class="section-label" style="color:var(--danger,#f87171);margin-top:0">Block Countries</div>
+            <div class="tag-list" id="spGeoBlockList"></div>
+            <div class="add-inline">
+              <input type="text" id="spGeoBlockInput" placeholder="CN" maxlength="2" style="text-transform:uppercase;width:5rem">
+              <button class="btn btn-sm btn-danger" onclick="spAddCountry('block')">Add</button>
+            </div>
+          </div>
+          <div>
+            <div class="section-label" style="color:var(--success,#4ade80);margin-top:0">Allow Countries Only</div>
+            <div class="tag-list" id="spGeoAllowList"></div>
+            <div class="add-inline">
+              <input type="text" id="spGeoAllowInput" placeholder="US" maxlength="2" style="text-transform:uppercase;width:5rem">
+              <button class="btn btn-sm btn-primary" onclick="spAddCountry('allow')">Add</button>
+            </div>
+            <div style="font-size:.75rem;color:var(--muted);margin-top:.4rem">If set, only these countries are allowed.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Antispam (SMTP) -->
+      <div id="sptab-antispam" class="tab-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Override Antispam for SMTP Frontends</div>
+            <div class="toggle-sub">When enabled, SMTP frontends using this profile use the settings below instead of the global antispam config.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spAsOverride" onchange="toggleSpAs()"><span class="slider"></span></label>
+        </div>
+        <div id="spAsDetails" style="display:none">
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Antispam Enabled</div>
+              <div class="toggle-sub">Enable antispam filtering for SMTP frontends using this profile</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="spAsEnabled" checked><span class="slider"></span></label>
+          </div>
+          <div class="form-grid" style="margin-top:.8rem">
+            <div class="form-group">
+              <label>Possible Spam Threshold % (blank = use global)</label>
+              <input type="number" id="spAsPossible" min="0" max="100" placeholder="e.g. 60">
+            </div>
+            <div class="form-group">
+              <label>Definite Spam Threshold % (blank = use global)</label>
+              <input type="number" id="spAsDefinite" min="0" max="100" placeholder="e.g. 90">
+            </div>
+          </div>
+
+          <div class="section-label" style="margin-top:1rem">Antivirus</div>
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Antivirus Enabled</div>
+              <div class="toggle-sub">Enable external antivirus scanner for SMTP frontends using this profile</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="spAvEnabled"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Reject on Virus</div>
+              <div class="toggle-sub">Reject email with 550 when a virus is detected</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="spAvReject" checked><span class="slider"></span></label>
+          </div>
+          <div class="form-grid" style="margin-top:.8rem">
+            <div class="form-group">
+              <label>On Scanner Error</label>
+              <select id="spAvErrorSel">
+                <option value="pass">Pass (treat as clean)</option>
+                <option value="tempfail">Tempfail</option>
+                <option value="reject">Reject</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>On Scanner Timeout</label>
+              <select id="spAvTimeoutSel">
+                <option value="pass">Pass</option>
+                <option value="tempfail">Tempfail</option>
+                <option value="reject">Reject</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="section-label">AV Scanners</div>
+          <table style="width:100%;border-collapse:collapse;font-size:.85rem">
+            <thead><tr>
+              <th style="text-align:left;padding:.3rem .4rem;font-size:.75rem;color:var(--muted)">Name</th>
+              <th style="text-align:left;padding:.3rem .4rem;font-size:.75rem;color:var(--muted)">Command</th>
+              <th style="text-align:left;padding:.3rem .4rem;font-size:.75rem;color:var(--muted)">Timeout</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="spAvRows"></tbody>
+          </table>
+          <div style="margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap;align-items:flex-end">
+            <div class="form-group" style="margin:0;flex:1;min-width:90px">
+              <label>Name</label>
+              <input type="text" id="spAvScannerName" placeholder="clamav">
+            </div>
+            <div class="form-group" style="margin:0;flex:3;min-width:180px">
+              <label>Command</label>
+              <input type="text" id="spAvScannerCmd" placeholder="clamdscan --no-summary -">
+            </div>
+            <div class="form-group" style="margin:0;width:5rem">
+              <label>Timeout</label>
+              <input type="text" id="spAvScannerTimeout" placeholder="30s">
+            </div>
+            <button class="btn btn-primary" onclick="spAddScanner()">Add</button>
+          </div>
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.3rem">Default exit codes: clean=0, virus=1, error=2,3. Customize further in TOML if needed.</div>
+        </div>
+      </div>
+
+      <div id="spError" class="form-error" style="display:none;margin-top:.8rem"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="submitProfile()">Save Profile</button>
+        <button class="btn btn-secondary" onclick="hideForm()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Profiles table -->
+    <table id="spTable">
+      <thead>
+        <tr><th>Name</th><th>Type</th><th>Description</th><th>WAF</th><th>Bot</th><th>GeoIP</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="spBody">
+        <tr><td colspan="6">Loading...</td></tr>
+      </tbody>
+    </table>
+
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+// ─── Per-profile mutable state ────────────────────────────────────────────────
+var spBotGoodBots     = [];
+var spJa3Fingerprints = [];
+var spBlockCountries  = [];
+var spAllowCountries  = [];
+var _spScanners       = [];
+
+// ─── Tab switching (within the form) ──────────────────────────────────────────
+// Tabs visible per profile type
+var SP_TYPE_TABS = {
+  HTTP: ['general','headers','cookies','bot','geo'],
+  SMTP: ['general','antispam','bot','geo'],
+  IMAP: ['general','bot','geo'],
+  TCP:  ['general','geo'],
+};
+var ALL_SP_TABS = ['general','headers','cookies','bot','geo','antispam'];
+
+function onProfileTypeChange() {
+  var type    = document.getElementById('spProfileType').value;
+  var visible = SP_TYPE_TABS[type] || SP_TYPE_TABS.HTTP;
+  var allTabs = document.querySelectorAll('#spTabs .tab');
+  var allPanels = document.querySelectorAll('#spForm .tab-panel');
+  // Show/hide WAF controls (HTTP only)
+  var showWaf = (type === 'HTTP');
+  var wafRow = document.getElementById('spWafEnabledRow');
+  var wafGrp = document.getElementById('spWafRulesetGroup');
+  if (wafRow) wafRow.style.display = showWaf ? '' : 'none';
+  if (wafGrp) wafGrp.style.display = showWaf ? '' : 'none';
+  // Show/hide tabs
+  ALL_SP_TABS.forEach(function(t, i) {
+    var show = visible.indexOf(t) !== -1;
+    allTabs[i].style.display  = show ? '' : 'none';
+    allPanels[i].style.display = (show && allPanels[i].classList.contains('active')) ? '' : allPanels[i].classList.contains('active') ? 'none' : '';
+  });
+  // If active tab is now hidden, switch to general
+  var activePanel = document.querySelector('#spForm .tab-panel.active');
+  var activeTabName = activePanel ? activePanel.id.replace('sptab-','') : 'general';
+  if (visible.indexOf(activeTabName) === -1) spTab('general');
+}
+
+function spTab(name) {
+  document.querySelectorAll('#spTabs .tab').forEach(function(t){ t.classList.remove('active'); });
+  document.querySelectorAll('#spForm .tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  ALL_SP_TABS.forEach(function(t, i) {
+    if (t === name) {
+      document.querySelectorAll('#spTabs .tab')[i].classList.add('active');
+      document.getElementById('sptab-' + name).classList.add('active');
+    }
+  });
+}
+
+// ─── Tag helpers ──────────────────────────────────────────────────────────────
+function spRenderTags(listId, arr, removeFn) {
+  var el = document.getElementById(listId);
+  el.innerHTML = arr.length
+    ? arr.map(function(v, i) {
+        return '<span class="tag">' + esc(v) +
+          '<button onclick="' + removeFn + '(' + i + ')" title="Remove">✕</button></span>';
+      }).join('')
+    : '<span style="font-size:.8rem;color:var(--muted)">None</span>';
+}
+
+function spAddTag(listId, inputId, arr) {
+  var v = document.getElementById(inputId).value.trim();
+  if (!v || arr.indexOf(v) !== -1) return;
+  arr.push(v);
+  document.getElementById(inputId).value = '';
+  if (listId === 'spBotGoodList') spRenderTags(listId, arr, 'spRemoveGoodBot');
+  if (listId === 'spJa3List')     spRenderTags(listId, arr, 'spRemoveJa3');
+}
+function spRemoveGoodBot(i) { spBotGoodBots.splice(i, 1);     spRenderTags('spBotGoodList', spBotGoodBots,     'spRemoveGoodBot'); }
+function spRemoveJa3(i)     { spJa3Fingerprints.splice(i, 1); spRenderTags('spJa3List',     spJa3Fingerprints, 'spRemoveJa3'); }
+
+// ─── Antispam override toggle ─────────────────────────────────────────────────
+function toggleSpAs() {
+  var on = document.getElementById('spAsOverride').checked;
+  document.getElementById('spAsDetails').style.display = on ? '' : 'none';
+}
+
+// ─── AV scanner list ──────────────────────────────────────────────────────────
+function spRenderScanners() {
+  var tbody = document.getElementById('spAvRows');
+  if (_spScanners.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);font-size:.8rem;padding:.4rem">No scanners configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = _spScanners.map(function(s, i) {
+    return '<tr>' +
+      '<td style="padding:.3rem .4rem">' + esc(s.name) + '</td>' +
+      '<td style="padding:.3rem .4rem;font-family:monospace;font-size:.8rem">' + esc(s.command) + '</td>' +
+      '<td style="padding:.3rem .4rem">' + esc(s.timeout || '30s') + '</td>' +
+      '<td style="padding:.3rem .4rem"><button class="btn btn-danger btn-sm" onclick="spRemoveScanner(' + i + ')">Remove</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function spAddScanner() {
+  var name    = document.getElementById('spAvScannerName').value.trim();
+  var command = document.getElementById('spAvScannerCmd').value.trim();
+  var timeout = document.getElementById('spAvScannerTimeout').value.trim() || '30s';
+  if (!name || !command) return;
+  _spScanners.push({
+    name: name, command: command, timeout: timeout,
+    clean_exit_codes: [0], virus_exit_codes: [1], error_exit_codes: [2, 3],
+    virus_name_pattern: null,
+  });
+  document.getElementById('spAvScannerName').value    = '';
+  document.getElementById('spAvScannerCmd').value     = '';
+  document.getElementById('spAvScannerTimeout').value = '';
+  spRenderScanners();
+}
+
+function spRemoveScanner(i) { _spScanners.splice(i, 1); spRenderScanners(); }
+
+function spAddCountry(type) {
+  var inputId = type === 'block' ? 'spGeoBlockInput' : 'spGeoAllowInput';
+  var v = document.getElementById(inputId).value.trim().toUpperCase();
+  if (!v) return;
+  document.getElementById(inputId).value = '';
+  if (type === 'block') {
+    if (spBlockCountries.indexOf(v) === -1) spBlockCountries.push(v);
+    spRenderTags('spGeoBlockList', spBlockCountries, 'spRemoveBlockCountry');
+  } else {
+    if (spAllowCountries.indexOf(v) === -1) spAllowCountries.push(v);
+    spRenderTags('spGeoAllowList', spAllowCountries, 'spRemoveAllowCountry');
+  }
+}
+function spRemoveBlockCountry(i) { spBlockCountries.splice(i, 1); spRenderTags('spGeoBlockList', spBlockCountries, 'spRemoveBlockCountry'); }
+function spRemoveAllowCountry(i) { spAllowCountries.splice(i, 1); spRenderTags('spGeoAllowList', spAllowCountries, 'spRemoveAllowCountry'); }
+
+// ─── Load WAF rulesets into select ───────────────────────────────────────────
+async function loadWafRulesets(current) {
+  try {
+    var r = await fetch('/api/waf', {headers: authHeaders()});
+    var d = await r.json();
+    var sel = document.getElementById('spWafRuleset');
+    sel.innerHTML = '<option value="">— none —</option>';
+    (d.waf_rules || []).forEach(function(w) {
+      var opt = document.createElement('option');
+      opt.value = w.name; opt.textContent = w.name;
+      if (w.name === current) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+}
+
+// ─── Show/hide ────────────────────────────────────────────────────────────────
+function showAddForm() {
+  clearForm();
+  document.getElementById('spFormTitle').textContent = 'Add Security Profile';
+  document.getElementById('spOrigName').value = '';
+  document.getElementById('spName').disabled = false;
+  document.getElementById('spTable').style.display = 'none';
+  document.getElementById('addSpBtn').style.display = 'none';
+  document.getElementById('spForm').style.display = '';
+  document.getElementById('spError').style.display = 'none';
+  setSelectVal('spProfileType', 'HTTP');
+  onProfileTypeChange();
+  spTab('general');
+  loadWafRulesets('');
+}
+
+function showEditForm(p) {
+  clearForm();
+  document.getElementById('spFormTitle').textContent = 'Edit Profile: ' + p.name;
+  document.getElementById('spOrigName').value = p.name;
+  document.getElementById('spName').value    = p.name;
+  document.getElementById('spName').disabled = true;
+  document.getElementById('spDesc').value    = p.description || '';
+
+  // General / WAF
+  setSelectVal('spProfileType', p.profile_type || 'HTTP');
+  document.getElementById('spWafEnabled').checked = !!p.waf_enabled;
+
+  // Headers
+  var h = p.headers || {};
+  document.getElementById('spHdrXcto').checked     = !!h.add_x_content_type_options;
+  document.getElementById('spHdrRmServer').checked = h.remove_server_header !== false;
+  document.getElementById('spHdrRmXpb').checked    = h.remove_x_powered_by !== false;
+  setSelectVal('spHdrXfo',     h.add_x_frame_options || '');
+  setSelectVal('spHdrReferer', h.add_referrer_policy || '');
+  document.getElementById('spHdrCsp').value = h.add_content_security_policy || '';
+
+  // Cookies
+  var c = p.cookies || {};
+  document.getElementById('spCkSecure').checked   = !!c.enforce_secure_flag;
+  document.getElementById('spCkHttpOnly').checked = !!c.enforce_httponly_flag;
+  setSelectVal('spCkSameSite', c.enforce_samesite || '');
+  document.getElementById('spCkMaxSize').value = c.max_cookie_size != null ? c.max_cookie_size : 4096;
+
+  // Bot
+  var b = p.bot_detection || {};
+  document.getElementById('spBotEnabled').checked   = !!b.enabled;
+  document.getElementById('spBotChallenge').checked = !!b.challenge_suspicious;
+  document.getElementById('spBotVerify').checked    = !!b.verify_good_bots;
+  spBotGoodBots     = (b.known_good_bots             || []).slice();
+  spJa3Fingerprints = (b.ja3_fingerprint_block_list  || []).slice();
+  spRenderTags('spBotGoodList', spBotGoodBots,     'spRemoveGoodBot');
+  spRenderTags('spJa3List',     spJa3Fingerprints, 'spRemoveJa3');
+
+  // Geo
+  var g = p.geo || {};
+  document.getElementById('spGeoEnabled').checked = !!g.enabled;
+  spBlockCountries = (g.block_countries || []).slice();
+  spAllowCountries = (g.allow_countries || []).slice();
+  spRenderTags('spGeoBlockList', spBlockCountries, 'spRemoveBlockCountry');
+  spRenderTags('spGeoAllowList', spAllowCountries, 'spRemoveAllowCountry');
+
+  // Antispam
+  var a = p.antispam;
+  if (a) {
+    document.getElementById('spAsOverride').checked = true;
+    document.getElementById('spAsDetails').style.display = '';
+    document.getElementById('spAsEnabled').checked = a.enabled !== false;
+    document.getElementById('spAsPossible').value  = a.possible_spam_threshold != null ? a.possible_spam_threshold : '';
+    document.getElementById('spAsDefinite').value  = a.definite_spam_threshold != null ? a.definite_spam_threshold : '';
+    var av = a.antivirus || {};
+    document.getElementById('spAvEnabled').checked = !!av.enabled;
+    document.getElementById('spAvReject').checked  = av.reject_on_virus !== false;
+    setSelectVal('spAvErrorSel',   av.on_scanner_error   || 'pass');
+    setSelectVal('spAvTimeoutSel', av.on_scanner_timeout || 'pass');
+    _spScanners = (av.scanners || []).map(function(s){ return Object.assign({}, s); });
+  } else {
+    document.getElementById('spAsOverride').checked = false;
+    document.getElementById('spAsDetails').style.display = 'none';
+    _spScanners = [];
+  }
+  spRenderScanners();
+
+  document.getElementById('spTable').style.display = 'none';
+  document.getElementById('addSpBtn').style.display = 'none';
+  document.getElementById('spForm').style.display = '';
+  document.getElementById('spError').style.display = 'none';
+  onProfileTypeChange();
+  spTab('general');
+  loadWafRulesets(p.waf_ruleset || '');
+}
+
+function hideForm() {
+  document.getElementById('spForm').style.display = 'none';
+  document.getElementById('spTable').style.display = '';
+  document.getElementById('addSpBtn').style.display = '';
+}
+
+function clearForm() {
+  ['spName','spDesc','spHdrCsp','spBotGoodInput','spJa3Input','spGeoBlockInput','spGeoAllowInput'].forEach(function(id){
+    var el = document.getElementById(id); if (el) el.value = '';
+  });
+  document.getElementById('spWafEnabled').checked    = false;
+  document.getElementById('spHdrXcto').checked       = false;
+  document.getElementById('spHdrRmServer').checked   = true;
+  document.getElementById('spHdrRmXpb').checked      = true;
+  document.getElementById('spCkSecure').checked      = false;
+  document.getElementById('spCkHttpOnly').checked    = false;
+  document.getElementById('spBotEnabled').checked    = false;
+  document.getElementById('spBotChallenge').checked  = false;
+  document.getElementById('spBotVerify').checked     = false;
+  document.getElementById('spGeoEnabled').checked    = false;
+  document.getElementById('spCkMaxSize').value       = 4096;
+  spBotGoodBots = []; spJa3Fingerprints = [];
+  spBlockCountries = []; spAllowCountries = [];
+  spRenderTags('spBotGoodList', spBotGoodBots,     'spRemoveGoodBot');
+  spRenderTags('spJa3List',     spJa3Fingerprints, 'spRemoveJa3');
+  spRenderTags('spGeoBlockList', spBlockCountries, 'spRemoveBlockCountry');
+  spRenderTags('spGeoAllowList', spAllowCountries, 'spRemoveAllowCountry');
+  setSelectVal('spProfileType', 'HTTP');
+  setSelectVal('spHdrXfo', ''); setSelectVal('spHdrReferer', ''); setSelectVal('spCkSameSite', '');
+  // Antispam
+  document.getElementById('spAsOverride').checked = false;
+  document.getElementById('spAsDetails').style.display = 'none';
+  document.getElementById('spAsEnabled').checked = true;
+  document.getElementById('spAsPossible').value  = '';
+  document.getElementById('spAsDefinite').value  = '';
+  document.getElementById('spAvEnabled').checked = false;
+  document.getElementById('spAvReject').checked  = true;
+  setSelectVal('spAvErrorSel',   'pass');
+  setSelectVal('spAvTimeoutSel', 'pass');
+  _spScanners = [];
+  spRenderScanners();
+}
+
+function setSelectVal(id, val) {
+  var el = document.getElementById(id);
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === val) { el.selectedIndex = i; return; }
+  }
+}
+
+// ─── Load list ────────────────────────────────────────────────────────────────
+var _spData = {};
+
+async function loadProfiles() {
+  try {
+    var r = await fetch('/api/security-profiles', {headers: authHeaders()});
+    var d = await r.json();
+    _spData = {};
+    var rows = '';
+    (d.profiles || []).forEach(function(p) {
+      _spData[p.name] = p;
+      var wafBadge = p.waf_enabled
+        ? '<span class="badge badge-red">on</span>'
+        : '<span class="badge badge-gray">off</span>';
+      var botBadge = (p.bot_detection && p.bot_detection.enabled)
+        ? '<span class="badge badge-red">on</span>'
+        : '<span class="badge badge-gray">off</span>';
+      var geoBadge = (p.geo && p.geo.enabled)
+        ? '<span class="badge badge-red">on</span>'
+        : '<span class="badge badge-gray">off</span>';
+      var typeBadge = '<span class="badge badge-gray">' + esc(p.profile_type || 'HTTP') + '</span>';
+      rows += '<tr>' +
+        '<td><strong>' + esc(p.name) + '</strong></td>' +
+        '<td>' + typeBadge + '</td>' +
+        '<td style="color:var(--muted)">' + esc(p.description || '') + '</td>' +
+        '<td>' + wafBadge + '</td>' +
+        '<td>' + botBadge + '</td>' +
+        '<td>' + geoBadge + '</td>' +
+        '<td>' +
+          '<button class="btn btn-secondary btn-sm" onclick="editProfile(\'' + esc(p.name) + '\')">Edit</button> ' +
+          '<button class="btn btn-danger btn-sm" onclick="deleteProfile(\'' + esc(p.name) + '\')">Delete</button>' +
+        '</td></tr>';
+    });
+    document.getElementById('spBody').innerHTML = rows ||
+      '<tr><td colspan="7" class="empty-state">No security profiles configured</td></tr>';
+  } catch(e) {
+    document.getElementById('spBody').innerHTML = '<tr><td colspan="7">Error loading profiles</td></tr>';
+  }
+}
+
+function editProfile(name) { showEditForm(_spData[name]); }
+
+// ─── Submit ───────────────────────────────────────────────────────────────────
+async function submitProfile() {
+  var errEl  = document.getElementById('spError');
+  var isEdit = !!document.getElementById('spOrigName').value;
+  var name   = isEdit ? document.getElementById('spOrigName').value
+                      : document.getElementById('spName').value.trim();
+  if (!name) { errEl.textContent = 'Name is required.'; errEl.style.display = ''; return; }
+
+  var body = {
+    name:         name,
+    description:  document.getElementById('spDesc').value.trim(),
+    profile_type: document.getElementById('spProfileType').value,
+    waf_enabled:  document.getElementById('spWafEnabled').checked,
+    waf_ruleset: document.getElementById('spWafRuleset').value || null,
+    headers: {
+      add_x_content_type_options:  document.getElementById('spHdrXcto').checked,
+      remove_server_header:        document.getElementById('spHdrRmServer').checked,
+      remove_x_powered_by:         document.getElementById('spHdrRmXpb').checked,
+      add_x_frame_options:         document.getElementById('spHdrXfo').value || null,
+      add_referrer_policy:         document.getElementById('spHdrReferer').value || null,
+      add_content_security_policy: document.getElementById('spHdrCsp').value.trim() || null,
+    },
+    cookies: {
+      enforce_secure_flag:   document.getElementById('spCkSecure').checked,
+      enforce_httponly_flag: document.getElementById('spCkHttpOnly').checked,
+      enforce_samesite:      document.getElementById('spCkSameSite').value || null,
+      max_cookie_size:       parseInt(document.getElementById('spCkMaxSize').value) || 0,
+    },
+    bot_detection: {
+      enabled:                   document.getElementById('spBotEnabled').checked,
+      challenge_suspicious:      document.getElementById('spBotChallenge').checked,
+      verify_good_bots:          document.getElementById('spBotVerify').checked,
+      known_good_bots:           spBotGoodBots,
+      ja3_fingerprint_block_list: spJa3Fingerprints,
+    },
+    geo: {
+      enabled:         document.getElementById('spGeoEnabled').checked,
+      block_countries: spBlockCountries,
+      allow_countries: spAllowCountries,
+    },
+    antispam: document.getElementById('spAsOverride').checked ? {
+      enabled:                  document.getElementById('spAsEnabled').checked,
+      possible_spam_threshold:  document.getElementById('spAsPossible').value !== ''
+                                  ? parseInt(document.getElementById('spAsPossible').value) : null,
+      definite_spam_threshold:  document.getElementById('spAsDefinite').value !== ''
+                                  ? parseInt(document.getElementById('spAsDefinite').value) : null,
+      antivirus: {
+        enabled:            document.getElementById('spAvEnabled').checked,
+        reject_on_virus:    document.getElementById('spAvReject').checked,
+        on_scanner_error:   document.getElementById('spAvErrorSel').value,
+        on_scanner_timeout: document.getElementById('spAvTimeoutSel').value,
+        scanners:           _spScanners,
+        weight:             1.0,
+      },
+    } : null,
+  };
+
+  var url    = isEdit ? '/api/security-profiles/' + encodeURIComponent(name) : '/api/security-profiles';
+  var method = isEdit ? 'PUT' : 'POST';
+  errEl.style.display = 'none';
+  try {
+    var r = await fetch(url, {method: method, headers: authHeaders(), body: JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Save failed'; errEl.style.display = ''; return; }
+    hideForm();
+    loadProfiles();
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+// ─── Delete ───────────────────────────────────────────────────────────────────
+async function deleteProfile(name) {
+  if (!confirm('Delete security profile "' + name + '"?')) return;
+  try {
+    var r = await fetch('/api/security-profiles/' + encodeURIComponent(name), {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Delete failed'); return; }
+    loadProfiles();
+  } catch(e) { alert('Request failed'); }
+}
+
+initPage('security-profiles');
+loadProfiles();
+</script>
+</body>
+</html>

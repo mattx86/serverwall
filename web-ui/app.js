@@ -21,8 +21,12 @@ var NAV_ITEMS = [
   ]},
   {id:'waf',       label:'WAF Rulesets', href:'/ui/waf.html'},
   {id:'acl',       label:'IP ACL',       href:'/ui/acl.html'},
-  {id:'security',  label:'Security',     href:'/ui/security.html'},
-  {id:'antispam',  label:'Antispam',     href:'/ui/antispam.html'},
+  {id:'security',          label:'Security',          href:'/ui/security.html'},
+  {id:'security-profiles', label:'Security Profiles', href:'/ui/security-profiles.html'},
+  {id:'tls-profiles',      label:'TLS Profiles',      href:'/ui/tls-profiles.html'},
+  {id:'log-profiles',      label:'Logging Profiles',  href:'/ui/log-profiles.html'},
+  {id:'antispam',          label:'Antispam',          href:'/ui/antispam.html'},
+  {id:'relay',             label:'Relay',             href:'/ui/relay.html'},
   {id:'email-auth', label:'Email Auth', href:'/ui/dkim.html', children:[
     {id:'dkim',  label:'DKIM Keys',     href:'/ui/dkim.html'},
     {id:'dmarc', label:'DMARC Policy',  href:'/ui/dmarc.html'},
@@ -30,6 +34,10 @@ var NAV_ITEMS = [
   ]},
   {id:'logs',      label:'Logs',         href:'/ui/logs.html'},
   {id:'queue',     label:'Mail Queue',   href:'/ui/queue.html', navId:'nav-queue'},
+  {id:'settings', label:'Settings', href:'/ui/global-settings.html', children:[
+    {id:'global-settings', label:'Global',           href:'/ui/global-settings.html'},
+    {id:'acme-settings',   label:"ACME / Let's Encrypt", href:'/ui/acme-settings.html'},
+  ]},
 ];
 
 function buildNav(activePage) {

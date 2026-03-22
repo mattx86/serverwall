@@ -1,15 +1,15 @@
-FROM ubuntu:24.04
+FROM rockylinux:8
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
+RUN dnf install -y \
     curl \
-    pkg-config \
-    libssl-dev \
+    pkgconf-pkg-config \
+    openssl-devel \
     cmake \
     perl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    gcc \
+    gcc-c++ \
+    make \
+    && dnf clean all
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain 1.88.0 --profile minimal

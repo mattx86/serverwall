@@ -67,6 +67,18 @@
           <select id="fWafRuleset"><option value="">-- none --</option></select>
         </div>
         <div class="form-group">
+          <label>Security Profile</label>
+          <select id="fSecurityProfile"><option value="">-- none --</option></select>
+        </div>
+        <div class="form-group">
+          <label>TLS Profile</label>
+          <select id="fTlsProfile"><option value="">-- none --</option></select>
+        </div>
+        <div class="form-group">
+          <label>Logging Profile</label>
+          <select id="fLogProfile"><option value="">-- none --</option></select>
+        </div>
+        <div class="form-group">
           <label>Max Connections (blank = unlimited)</label>
           <input type="number" id="fMaxConn" min="1" placeholder="">
         </div>
@@ -81,6 +93,23 @@
           <label>Log File</label>
           <input type="text" id="fLogFile" placeholder="/opt/serverwall/var/log/web.log">
         </div>
+        <div class="form-group">
+          <label>Log Format</label>
+          <select id="fLogFormat">
+            <option value="">— default —</option>
+            <option value="apache_combined">Apache Combined</option>
+            <option value="json">JSON</option>
+            <option value="logfmt">logfmt</option>
+          </select>
+        </div>
+        <div class="form-group" id="fTlsMinVersionGroup">
+          <label>TLS Minimum Version</label>
+          <select id="fTlsMinVersion">
+            <option value="">— inherit global —</option>
+            <option value="1.2">TLS 1.2+</option>
+            <option value="1.3">TLS 1.3 only</option>
+          </select>
+        </div>
       </div>
       <div style="margin-top:.8rem">
         <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">HTTP Headers</label>
@@ -88,7 +117,18 @@
           <label class="form-check"><input type="checkbox" id="fXFF"> X-Forwarded-For</label>
           <label class="form-check"><input type="checkbox" id="fXRI"> X-Real-IP</label>
           <label class="form-check"><input type="checkbox" id="fXFP"> X-Forwarded-Proto</label>
+          <label class="form-check"><input type="checkbox" id="fXFH"> X-Forwarded-Host</label>
+          <label class="form-check"><input type="checkbox" id="fXFPort"> X-Forwarded-Port</label>
+          <label class="form-check"><input type="checkbox" id="fXRID"> X-Request-ID</label>
+          <label class="form-check"><input type="checkbox" id="fAccessLog"> Access Log</label>
           <label class="form-check"><input type="checkbox" id="fWaf"> WAF Enabled</label>
+        </div>
+      </div>
+      <div id="fSmtpHeadersGroup" style="margin-top:.8rem;display:none">
+        <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">SMTP Headers</label>
+        <div style="display:flex;gap:1rem;flex-wrap:wrap">
+          <label class="form-check"><input type="checkbox" id="fSmtpReceived"> Add Received header</label>
+          <label class="form-check"><input type="checkbox" id="fSmtpXFF"> Add X-Forwarded-For</label>
         </div>
       </div>
       <div id="saveError" class="form-error" style="display:none;margin-top:.8rem"></div>
@@ -113,6 +153,13 @@ function toggleStickyField() {
   document.getElementById('fStickyGroup').style.display = isSticky ? '' : 'none';
 }
 
+function toggleProtocolFields() {
+  var proto = document.getElementById('fProtocol').value;
+  var isSmtp = proto === 'smtps' || proto === 'smtpstarttls';
+  document.getElementById('fSmtpHeadersGroup').style.display = isSmtp ? '' : 'none';
+}
+document.getElementById('fProtocol').addEventListener('change', toggleProtocolFields);
+
 function syncCertFields() {
   var sel = document.getElementById('fTlsCertSelect').value;
   if (sel && _certMap[sel]) {
@@ -124,7 +171,7 @@ function syncCertFields() {
   }
 }
 
-async function loadDropdowns(currentPool, currentWaf, currentCert) {
+async function loadDropdowns(currentPool, currentWaf, currentCert, currentProfile, currentTls, currentLog) {
   // Pools
   try {
     var r = await fetch('/api/backends', {headers: authHeaders()});
@@ -175,6 +222,48 @@ async function loadDropdowns(currentPool, currentWaf, currentCert) {
     });
     syncCertFields();
   } catch(e) {}
+
+  // Security profiles
+  try {
+    var r4 = await fetch('/api/security-profiles', {headers: authHeaders()});
+    var d4 = await r4.json();
+    var profSel = document.getElementById('fSecurityProfile');
+    profSel.innerHTML = '<option value="">-- none --</option>';
+    (d4.profiles || []).forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name + (p.description ? ' — ' + p.description : '');
+      if (p.name === currentProfile) opt.selected = true;
+      profSel.appendChild(opt);
+    });
+  } catch(e) {}
+
+  // TLS profiles
+  try {
+    var r5 = await fetch('/api/tls-profiles', {headers: authHeaders()});
+    var d5 = await r5.json();
+    var tlsSel = document.getElementById('fTlsProfile');
+    tlsSel.innerHTML = '<option value="">-- none --</option>';
+    (d5.profiles || []).forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name + (p.description ? ' — ' + p.description : '');
+      if (p.name === currentTls) opt.selected = true;
+      tlsSel.appendChild(opt);
+    });
+  } catch(e) {}
+
+  // Log profiles
+  try {
+    var r6 = await fetch('/api/log-profiles', {headers: authHeaders()});
+    var d6 = await r6.json();
+    var logSel = document.getElementById('fLogProfile');
+    logSel.innerHTML = '<option value="">-- none --</option>';
+    (d6.profiles || []).forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name + (p.description ? ' — ' + p.description : '');
+      if (p.name === currentLog) opt.selected = true;
+      logSel.appendChild(opt);
+    });
+  } catch(e) {}
 }
 
 async function loadFrontend() {
@@ -202,16 +291,25 @@ async function loadFrontend() {
     document.getElementById('fListen').value   = (f.listen || []).join('\n');
     document.getElementById('fMaxConn').value  = f.max_connections || '';
     document.getElementById('fLogFile').value  = f.log_file || '';
-    document.getElementById('fXFF').checked    = !!(f.headers && f.headers.x_forwarded_for);
-    document.getElementById('fXRI').checked    = !!(f.headers && f.headers.x_real_ip);
-    document.getElementById('fXFP').checked    = !!(f.headers && f.headers.x_forwarded_proto);
-    document.getElementById('fWaf').checked    = !!f.waf_enabled;
+    document.getElementById('fXFF').checked      = !!(f.headers && f.headers.x_forwarded_for);
+    document.getElementById('fXRI').checked      = !!(f.headers && f.headers.x_real_ip);
+    document.getElementById('fXFP').checked      = !!(f.headers && f.headers.x_forwarded_proto);
+    document.getElementById('fXFH').checked      = !!(f.headers && f.headers.x_forwarded_host);
+    document.getElementById('fXFPort').checked   = !!(f.headers && f.headers.x_forwarded_port);
+    document.getElementById('fXRID').checked     = !!(f.headers && f.headers.x_request_id);
+    document.getElementById('fAccessLog').checked = !!f.access_log;
+    document.getElementById('fWaf').checked      = !!f.waf_enabled;
+    document.getElementById('fSmtpReceived').checked = !!(f.smtp_headers && f.smtp_headers.add_received);
+    document.getElementById('fSmtpXFF').checked      = !!(f.smtp_headers && f.smtp_headers.x_forwarded_for);
+    if (f.log_format) setSelect('fLogFormat', f.log_format);
+    if (f.tls_min_version) setSelect('fTlsMinVersion', f.tls_min_version);
+    toggleProtocolFields();
     setSelect('fBalancer', (f.balancer || 'round_robin').toLowerCase());
     toggleStickyField();
     if (f.session_cookie) document.getElementById('fStickyCookie').value = f.session_cookie;
     if (f.acl) setSelect('fAclDefault', (f.acl.default_action || 'allow').toLowerCase());
 
-    await loadDropdowns(f.backend_pool, f.waf_ruleset, f.tls_cert);
+    await loadDropdowns(f.backend_pool, f.waf_ruleset, f.tls_cert, f.security_profile, f.tls_profile, f.log_profile);
     document.getElementById('editPanel').style.display = '';
   } catch(e) {
     document.getElementById('loadError').textContent = 'Request failed: ' + e.message;
@@ -237,23 +335,45 @@ async function saveFrontend() {
     errEl.style.display = ''; return;
   }
 
+  var proto = document.getElementById('fProtocol').value;
   var body = {
     name:        feName,
-    protocol:    document.getElementById('fProtocol').value,
+    protocol:    proto,
     listen:      listenRaw.split('\n').map(function(s){return s.trim()}).filter(Boolean),
     backend_pool: pool,
     balancer:    document.getElementById('fBalancer').value,
     waf_enabled: document.getElementById('fWaf').checked,
+    access_log:  document.getElementById('fAccessLog').checked,
     headers: {
       x_forwarded_for:   document.getElementById('fXFF').checked,
       x_real_ip:         document.getElementById('fXRI').checked,
       x_forwarded_proto: document.getElementById('fXFP').checked,
+      x_forwarded_host:  document.getElementById('fXFH').checked,
+      x_forwarded_port:  document.getElementById('fXFPort').checked,
+      x_request_id:      document.getElementById('fXRID').checked,
+    },
+    smtp_headers: {
+      add_received:    document.getElementById('fSmtpReceived').checked,
+      x_forwarded_for: document.getElementById('fSmtpXFF').checked,
     },
     acl: { default_action: document.getElementById('fAclDefault').value },
   };
+  var logFmt = document.getElementById('fLogFormat').value;
+  if (logFmt) body.log_format = logFmt;
+  var tlsMin = document.getElementById('fTlsMinVersion').value;
+  if (tlsMin) body.tls_min_version = tlsMin;
 
   var wafRuleset = document.getElementById('fWafRuleset').value.trim();
   if (wafRuleset) body.waf_ruleset = wafRuleset;
+
+  var secProfile = document.getElementById('fSecurityProfile').value.trim();
+  if (secProfile) body.security_profile = secProfile;
+
+  var tlsProfile = document.getElementById('fTlsProfile').value.trim();
+  if (tlsProfile) body.tls_profile = tlsProfile;
+
+  var logProfile = document.getElementById('fLogProfile').value.trim();
+  if (logProfile) body.log_profile = logProfile;
 
   var maxConn = parseInt(document.getElementById('fMaxConn').value);
   if (maxConn > 0) body.max_connections = maxConn;

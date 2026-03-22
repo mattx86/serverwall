@@ -12,7 +12,7 @@ use std::net::IpAddr;
 
 use regex::Regex;
 
-use crate::config::schema::{AclDefaultAction, FrontendAclConfig, PathPatternConfig};
+use crate::config::schema::{AclDefaultAction, FrontendAclConfig, IpAclConfig, PathPatternConfig};
 
 /// Result of an ACL evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +96,28 @@ impl AccessControlEngine {
     /// Convenience method: returns true if the IP is allowed.
     pub fn is_allowed(&self, ip: IpAddr) -> bool {
         self.evaluate(ip) == AclDecision::Allow
+    }
+
+    /// Create a global IP ACL from `[security.acl.ip]` config.
+    ///
+    /// The default action is `Allow` so that only explicitly blocked CIDRs
+    /// are rejected (a global allow list restricts to those CIDRs only).
+    pub fn from_global_ip(ip_acl: &IpAclConfig) -> Result<Self, ip_network::IpNetworkParseError> {
+        let block_list = if ip_acl.block.is_empty() {
+            None
+        } else {
+            Some(BlockList::new(&ip_acl.block)?)
+        };
+        let allow_list = if ip_acl.allow.is_empty() {
+            None
+        } else {
+            Some(AllowList::new(&ip_acl.allow)?)
+        };
+        Ok(Self {
+            block_list,
+            allow_list,
+            default_action: AclDefaultAction::Allow,
+        })
     }
 }
 

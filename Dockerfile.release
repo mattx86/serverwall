@@ -1,16 +1,16 @@
 # Stage 1: Build release binaries
-FROM ubuntu:24.04 AS builder
+FROM rockylinux:8 AS builder
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
+RUN dnf install -y \
     curl \
-    pkg-config \
-    libssl-dev \
+    pkgconf-pkg-config \
+    openssl-devel \
     cmake \
     perl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    gcc \
+    gcc-c++ \
+    make \
+    && dnf clean all
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain 1.88.0 --profile minimal
@@ -25,7 +25,9 @@ RUN cargo build --release \
     -p serverwall-cli
 
 # Stage 2: Assemble release package
-FROM ubuntu:24.04 AS packager
+FROM rockylinux:8 AS packager
+
+RUN dnf install -y curl gzip && dnf clean all
 
 WORKDIR /package
 
@@ -34,10 +36,17 @@ COPY --from=builder /app/target/release/serverwall        ./bin/serverwall
 COPY --from=builder /app/target/release/serverwall-webui  ./bin/serverwall-webui
 COPY --from=builder /app/target/release/serverwallctl     ./bin/serverwallctl
 
-# Packaging: installer and systemd units
+# Packaging: installer, systemd units, and attribution notices
 COPY packaging/install.sh                          ./install.sh
 COPY packaging/systemd/serverwall.service          ./systemd/serverwall.service
 COPY packaging/systemd/serverwall-webui.service    ./systemd/serverwall-webui.service
+COPY THIRD_PARTY_NOTICES                           ./THIRD_PARTY_NOTICES
+
+# Download DB-IP Lite country database (CC BY 4.0 — free redistribution with attribution).
+RUN mkdir -p ./geoip && \
+    YEAR=$(date +%Y); MONTH=$(date +%m); \
+    curl -fsSL "https://download.db-ip.com/free/dbip-country-lite-${YEAR}-${MONTH}.mmdb.gz" \
+    | gunzip > ./geoip/dbip-country-lite.mmdb
 
 # Version metadata (used when naming the archive)
 COPY --from=builder /app/Cargo.toml ./Cargo.toml
@@ -47,10 +56,12 @@ RUN chmod +x ./install.sh ./bin/serverwall ./bin/serverwall-webui ./bin/serverwa
 CMD VERSION=$(grep '^version' /package/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/'); \
     NAME="serverwall-${VERSION}"; \
     DEST="/tmp/${NAME}"; \
-    mkdir -p "${DEST}/bin" "${DEST}/systemd"; \
-    cp /package/install.sh       "${DEST}/install.sh"; \
-    cp /package/bin/*            "${DEST}/bin/"; \
-    cp /package/systemd/*        "${DEST}/systemd/"; \
+    mkdir -p "${DEST}/bin" "${DEST}/systemd" "${DEST}/geoip"; \
+    cp /package/install.sh         "${DEST}/install.sh"; \
+    cp /package/THIRD_PARTY_NOTICES "${DEST}/THIRD_PARTY_NOTICES"; \
+    cp /package/bin/*              "${DEST}/bin/"; \
+    cp /package/systemd/*          "${DEST}/systemd/"; \
+    cp /package/geoip/*            "${DEST}/geoip/"; \
     mkdir -p /dist; \
     tar -czf "/dist/${NAME}.tar.gz" -C /tmp "${NAME}"; \
     echo "Created: /dist/${NAME}.tar.gz"

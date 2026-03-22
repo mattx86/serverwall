@@ -70,6 +70,18 @@
           <select id="fWafRuleset"><option value="">-- none --</option></select>
         </div>
         <div class="form-group">
+          <label>Security Profile</label>
+          <select id="fSecurityProfile"><option value="">-- none --</option></select>
+        </div>
+        <div class="form-group">
+          <label>TLS Profile</label>
+          <select id="fTlsProfile"><option value="">-- none --</option></select>
+        </div>
+        <div class="form-group">
+          <label>Logging Profile</label>
+          <select id="fLogProfile"><option value="">-- none --</option></select>
+        </div>
+        <div class="form-group">
           <label>Max Connections (blank = unlimited)</label>
           <input type="number" id="fMaxConn" min="1" placeholder="">
         </div>
@@ -209,6 +221,45 @@ async function populateDropdowns() {
       };
     });
   } catch(e) {}
+
+  // Security profiles
+  try {
+    var r4 = await fetch('/api/security-profiles', {headers: authHeaders()});
+    var d4 = await r4.json();
+    var profSel = document.getElementById('fSecurityProfile');
+    profSel.innerHTML = '<option value="">-- none --</option>';
+    (d4.profiles || []).forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name + (p.description ? ' — ' + p.description : '');
+      profSel.appendChild(opt);
+    });
+  } catch(e) {}
+
+  // TLS profiles
+  try {
+    var r5 = await fetch('/api/tls-profiles', {headers: authHeaders()});
+    var d5 = await r5.json();
+    var tlsSel = document.getElementById('fTlsProfile');
+    tlsSel.innerHTML = '<option value="">-- none --</option>';
+    (d5.profiles || []).forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name + (p.description ? ' — ' + p.description : '');
+      tlsSel.appendChild(opt);
+    });
+  } catch(e) {}
+
+  // Log profiles
+  try {
+    var r6 = await fetch('/api/log-profiles', {headers: authHeaders()});
+    var d6 = await r6.json();
+    var logSel = document.getElementById('fLogProfile');
+    logSel.innerHTML = '<option value="">-- none --</option>';
+    (d6.profiles || []).forEach(function(p) {
+      var opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name + (p.description ? ' — ' + p.description : '');
+      logSel.appendChild(opt);
+    });
+  } catch(e) {}
 }
 
 async function loadFrontends() {
@@ -275,6 +326,15 @@ async function submitFrontend() {
 
   var wafRuleset = document.getElementById('fWafRuleset').value.trim();
   if (wafRuleset) body.waf_ruleset = wafRuleset;
+
+  var secProfile = document.getElementById('fSecurityProfile').value.trim();
+  if (secProfile) body.security_profile = secProfile;
+
+  var tlsProfile = document.getElementById('fTlsProfile').value.trim();
+  if (tlsProfile) body.tls_profile = tlsProfile;
+
+  var logProfile = document.getElementById('fLogProfile').value.trim();
+  if (logProfile) body.log_profile = logProfile;
 
   var maxConn = parseInt(document.getElementById('fMaxConn').value);
   if (maxConn > 0) body.max_connections = maxConn;

@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use rustls::pki_types::ServerName;
@@ -18,31 +19,51 @@ use serverwall_core::types::{Backend, ConnectionGuard};
 /// to "connected backend stream".
 pub struct RequestPipeline {
     acl: AccessControlEngine,
+    global_ip_acl: Option<Arc<AccessControlEngine>>,
     geo: Option<Arc<GeoEngine>>,
     balancer: Box<dyn LoadBalancer>,
     backends: Vec<Arc<Backend>>,
+    /// Global fallback: whether to verify backend TLS certificates.
+    backend_tls_verify: bool,
+    /// Optional custom CA bundle path for backend TLS verification.
+    backend_ca_bundle: Option<PathBuf>,
 }
 
 impl RequestPipeline {
     /// Create a new request pipeline.
     pub fn new(
         acl: AccessControlEngine,
+        global_ip_acl: Option<Arc<AccessControlEngine>>,
         geo: Option<Arc<GeoEngine>>,
         balancer: Box<dyn LoadBalancer>,
         backends: Vec<Arc<Backend>>,
+        backend_tls_verify: bool,
+        backend_ca_bundle: Option<PathBuf>,
     ) -> Self {
         Self {
             acl,
+            global_ip_acl,
             geo,
             balancer,
             backends,
+            backend_tls_verify,
+            backend_ca_bundle,
         }
     }
 
-    /// Check the ACL (IP-based + geo) for a client IP.
+    /// Check the ACL (global IP, per-frontend IP, geo) for a client IP.
     ///
+    /// Evaluation order: global IP ACL → per-frontend IP ACL → geo.
     /// Returns `Ok(())` if the client is allowed, or an error if denied.
     pub fn check_acl(&self, client_ip: IpAddr) -> Result<(), ServerWallError> {
+        // Global IP ACL (security.acl.ip) is checked first.
+        if let Some(ref global) = self.global_ip_acl {
+            match global.evaluate(client_ip) {
+                AclDecision::Deny => return Err(ServerWallError::AccessDenied { ip: client_ip }),
+                AclDecision::Allow => {}
+            }
+        }
+        // Per-frontend ACL.
         match self.acl.evaluate(client_ip) {
             AclDecision::Deny => return Err(ServerWallError::AccessDenied { ip: client_ip }),
             AclDecision::Allow => {}
@@ -85,12 +106,15 @@ impl RequestPipeline {
 
     /// Establish a TLS connection to the selected backend.
     ///
-    /// Uses the backend's `tls_verify` and `tls_sni` settings to configure
-    /// the TLS connector.
+    /// Uses the backend's `tls_verify` setting (falling back to the global
+    /// `backend_tls_verify` flag) and `backend_ca_bundle` for certificate
+    /// verification.
     pub async fn connect_backend_tls(
+        &self,
         backend: &Backend,
     ) -> Result<TlsStream<TcpStream>, ServerWallError> {
-        let connector = build_tls_connector(backend.tls_verify)?;
+        let verify = if backend.tls_verify { true } else { self.backend_tls_verify };
+        let connector = build_tls_connector(verify, self.backend_ca_bundle.as_deref())?;
 
         let tcp_stream = TcpStream::connect(backend.address).await?;
 
@@ -112,6 +136,18 @@ impl RequestPipeline {
         })?;
 
         Ok(tls_stream)
+    }
+
+    /// Returns true if the client IP is explicitly allowed by the global IP ACL.
+    ///
+    /// Used to implement `acl_bypass_waf`: IPs in the global allow list can
+    /// bypass WAF inspection when the feature is enabled in config.
+    pub fn is_globally_allowed(&self, ip: IpAddr) -> bool {
+        if let Some(ref global) = self.global_ip_acl {
+            global.evaluate(ip) == AclDecision::Allow
+        } else {
+            false
+        }
     }
 
     /// Find a backend by its opaque tag (used for sticky-session routing).

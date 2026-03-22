@@ -22,7 +22,7 @@ pub async fn list(State(state): State<AppState>) -> Json<Value> {
                 "frontend": f.name,
                 "allow_list": f.acl.allow_list,
                 "block_list": f.acl.block_list,
-                "default_action": format!("{:?}", f.acl.default_action).to_lowercase(),
+                "default_action": serde_json::to_value(&f.acl.default_action).ok().and_then(|j| j.as_str().map(str::to_owned)).unwrap_or_default(),
             })
         })
         .collect();
@@ -92,16 +92,16 @@ fn apply(
     }
 }
 
-// Legacy stubs kept for compatibility
-pub async fn get(Path(_id): Path<String>) -> Json<Value> {
-    Json(json!({"error": "use /api/acl/global for global IP ACL management"}))
+// Legacy stubs kept for compatibility — return 404 with redirect hint
+pub async fn get(Path(_id): Path<String>) -> (StatusCode, Json<Value>) {
+    (StatusCode::NOT_FOUND, Json(json!({"error": "use /api/acl/global for global IP ACL management"})))
 }
-pub async fn create() -> Json<Value> {
-    Json(json!({"error": "use /api/acl/global/allow or /api/acl/global/block"}))
+pub async fn create() -> (StatusCode, Json<Value>) {
+    (StatusCode::BAD_REQUEST, Json(json!({"error": "use /api/acl/global/allow or /api/acl/global/block"})))
 }
-pub async fn update(Path(_id): Path<String>) -> Json<Value> {
-    Json(json!({"error": "use /api/acl/global for global IP ACL management"}))
+pub async fn update(Path(_id): Path<String>) -> (StatusCode, Json<Value>) {
+    (StatusCode::NOT_FOUND, Json(json!({"error": "use /api/acl/global for global IP ACL management"})))
 }
-pub async fn delete(Path(_id): Path<String>) -> Json<Value> {
-    Json(json!({"error": "use /api/acl/global/allow or /api/acl/global/block"}))
+pub async fn delete(Path(_id): Path<String>) -> (StatusCode, Json<Value>) {
+    (StatusCode::NOT_FOUND, Json(json!({"error": "use /api/acl/global/allow or /api/acl/global/block"})))
 }

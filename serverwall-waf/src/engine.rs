@@ -56,6 +56,10 @@ pub struct WafEngine {
     paranoia_level: u8,
     rule_groups: Vec<CompiledRuleGroup>,
     limits: RequestLimits,
+    /// URL path prefixes that bypass WAF inspection entirely.
+    excluded_paths: Vec<String>,
+    /// Client IPs that bypass WAF inspection entirely.
+    excluded_ips: Vec<String>,
 }
 
 impl WafEngine {
@@ -90,6 +94,8 @@ impl WafEngine {
             paranoia_level,
             rule_groups,
             limits,
+            excluded_paths: Vec::new(),
+            excluded_ips: Vec::new(),
         }
     }
 
@@ -113,6 +119,9 @@ impl WafEngine {
         if !custom_rules.is_empty() {
             engine.add_custom_rules(custom_rules);
         }
+
+        engine.excluded_paths = config.exclusions.paths.clone();
+        engine.excluded_ips = config.exclusions.ip_addresses.clone();
 
         engine
     }
@@ -143,6 +152,23 @@ impl WafEngine {
     pub fn inspect(&self, ctx: &HttpRequestContext) -> WafVerdict {
         // If WAF is disabled, allow everything
         if self.mode == WafMode::Disabled {
+            return WafVerdict {
+                decision: WafDecision::Allow,
+                matched_rules: Vec::new(),
+                anomaly_score: 0,
+            };
+        }
+
+        // Check exclusions: excluded IPs or paths bypass WAF inspection.
+        let client_ip_str = ctx.remote_addr.to_string();
+        if self.excluded_ips.iter().any(|ip| ip == &client_ip_str) {
+            return WafVerdict {
+                decision: WafDecision::Allow,
+                matched_rules: Vec::new(),
+                anomaly_score: 0,
+            };
+        }
+        if self.excluded_paths.iter().any(|p| ctx.path.starts_with(p.as_str())) {
             return WafVerdict {
                 decision: WafDecision::Allow,
                 matched_rules: Vec::new(),

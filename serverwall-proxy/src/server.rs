@@ -105,6 +105,22 @@ impl Server {
         let geo_engine: Option<Arc<GeoEngine>> =
             GeoEngine::from_config(&self.config.security.geo).map(Arc::new);
 
+        // Build the global IP ACL from [security.acl.ip] (shared across all frontends).
+        let global_ip_acl: Option<Arc<AccessControlEngine>> = {
+            let ip = &self.config.security.acl.ip;
+            if ip.allow.is_empty() && ip.block.is_empty() {
+                None
+            } else {
+                match AccessControlEngine::from_global_ip(ip) {
+                    Ok(engine) => Some(Arc::new(engine)),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "global IP ACL parse error — global ACL disabled");
+                        None
+                    }
+                }
+            }
+        };
+
         // Start relay daemon (delivery manager + optional inbound receiver).
         if self.config.relay.enabled {
             match build_relay(&self.config.relay, shutdown_rx.clone()) {
@@ -135,7 +151,28 @@ impl Server {
             let acl = AccessControlEngine::from_config(&frontend.acl)
                 .map_err(|e| anyhow::anyhow!("ACL config error in frontend '{}': {}", frontend.name, e))?;
 
-            let pipeline = Arc::new(RequestPipeline::new(acl, geo_engine.clone(), balancer, pool_backends));
+            // If the frontend has a security profile with a geo override, use that geo engine;
+            // otherwise fall back to the global geo engine.
+            let frontend_geo: Option<Arc<GeoEngine>> =
+                if let Some(ref pname) = frontend.security_profile {
+                    if let Some(p) = self.config.security_profiles.iter().find(|p| p.name == *pname) {
+                        GeoEngine::from_config(&p.geo).map(Arc::new).or_else(|| geo_engine.clone())
+                    } else {
+                        geo_engine.clone()
+                    }
+                } else {
+                    geo_engine.clone()
+                };
+
+            let pipeline = Arc::new(RequestPipeline::new(
+                acl,
+                global_ip_acl.clone(),
+                frontend_geo,
+                balancer,
+                pool_backends,
+                self.config.security.tls.backend_tls_verify,
+                self.config.security.tls.backend_ca_bundle.clone(),
+            ));
 
             match frontend.protocol {
                 ProtocolType::Tcp => {
@@ -165,7 +202,7 @@ impl Server {
                     cert_store.add_from_cert(certified_key.clone());
                     cert_store.set_default(certified_key);
 
-                    let acceptor = build_tls_acceptor(cert_store)
+                    let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
                         .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
 
                     let listener = TlsListenerTask::new(
@@ -193,8 +230,36 @@ impl Server {
                     let certified_key = CertStore::load_from_frontend(frontend)
                         .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
 
+                    // Resolve TLS policy: tls_profile overrides global security.tls.
+                    let (eff_hsts_max_age, eff_hsts_subdomains, eff_ocsp, eff_min_version) =
+                        if let Some(ref pname) = frontend.tls_profile {
+                            match self.config.tls_profiles.iter().find(|p| p.name == *pname) {
+                                Some(p) => (p.hsts_max_age, p.hsts_include_subdomains, p.ocsp_stapling, p.min_version.clone()),
+                                None => {
+                                    tracing::warn!(
+                                        frontend = %frontend.name,
+                                        profile  = %pname,
+                                        "TLS profile not found; falling back to global settings",
+                                    );
+                                    (
+                                        self.config.security.tls.hsts_max_age,
+                                        self.config.security.tls.hsts_include_subdomains,
+                                        self.config.security.tls.ocsp_stapling,
+                                        frontend.tls_min_version.clone(),
+                                    )
+                                }
+                            }
+                        } else {
+                            (
+                                self.config.security.tls.hsts_max_age,
+                                self.config.security.tls.hsts_include_subdomains,
+                                self.config.security.tls.ocsp_stapling,
+                                frontend.tls_min_version.clone(),
+                            )
+                        };
+
                     // Optionally fetch and attach an OCSP staple.
-                    let certified_key = if self.config.security.tls.ocsp_stapling {
+                    let certified_key = if eff_ocsp {
                         staple_certified_key(certified_key).await
                     } else {
                         certified_key
@@ -203,7 +268,7 @@ impl Server {
                     cert_store.add_from_cert(certified_key.clone());
                     cert_store.set_default(certified_key);
 
-                    let acceptor = build_tls_acceptor(cert_store)
+                    let acceptor = build_tls_acceptor(cert_store, &eff_min_version)
                         .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
 
                     let tls_listener = TlsListenerTask::new(
@@ -213,9 +278,46 @@ impl Server {
                         acceptor,
                     );
 
+                    // Resolve security settings: use profile overrides if a profile is assigned.
+                    let (eff_waf_enabled, eff_waf_ruleset, eff_headers, eff_cookies, eff_bot) =
+                        if let Some(ref profile_name) = frontend.security_profile {
+                            match self.config.security_profiles.iter().find(|p| p.name == *profile_name) {
+                                Some(p) => (
+                                    p.waf_enabled,
+                                    p.waf_ruleset.clone(),
+                                    p.headers.clone(),
+                                    p.cookies.clone(),
+                                    p.bot_detection.clone(),
+                                ),
+                                None => {
+                                    tracing::warn!(
+                                        frontend = %frontend.name,
+                                        profile  = %profile_name,
+                                        "security profile not found; falling back to global settings",
+                                    );
+                                    (
+                                        frontend.waf_enabled,
+                                        frontend.waf_ruleset.clone(),
+                                        self.config.security.headers.clone(),
+                                        self.config.security.cookies.clone(),
+                                        self.config.security.bot_detection.clone(),
+                                    )
+                                }
+                            }
+                        } else {
+                            (
+                                frontend.waf_enabled,
+                                frontend.waf_ruleset.clone(),
+                                self.config.security.headers.clone(),
+                                self.config.security.cookies.clone(),
+                                self.config.security.bot_detection.clone(),
+                            )
+                        };
+
                     // Build WAF engine if enabled, using the named ruleset config if present.
-                    let waf = if frontend.waf_enabled {
-                        let engine = if let Some(ref ruleset_name) = frontend.waf_ruleset {
+                    // global security.enabled = false disables WAF regardless of per-frontend setting.
+                    let waf = if eff_waf_enabled && self.config.security.enabled {
+                        let engine = if let Some(ref ruleset_name) = eff_waf_ruleset {
                             self.config
                                 .waf_ruleset
                                 .iter()
@@ -249,17 +351,70 @@ impl Server {
                         }
                     };
 
+                    // Resolve effective log settings from log_profile (if set) or inline fields.
+                    let (eff_log_format, eff_access_log, eff_log_file) =
+                        if let Some(ref pname) = frontend.log_profile {
+                            match self.config.log_profiles.iter().find(|p| p.name == *pname) {
+                                Some(p) => (p.format, p.access_log, frontend.log_file.clone()),
+                                None => {
+                                    tracing::warn!(
+                                        frontend = %frontend.name,
+                                        profile  = %pname,
+                                        "log profile not found; falling back to inline settings",
+                                    );
+                                    (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                                }
+                            }
+                        } else {
+                            (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                        };
+
+                    // Open access log file if enabled and a path is configured.
+                    let log_writer: Option<Arc<tokio::sync::Mutex<tokio::io::BufWriter<tokio::fs::File>>>> =
+                        if eff_access_log {
+                            if let Some(ref path) = eff_log_file {
+                                match tokio::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(path)
+                                    .await
+                                {
+                                    Ok(file) => Some(Arc::new(tokio::sync::Mutex::new(
+                                        tokio::io::BufWriter::new(file),
+                                    ))),
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            frontend = %frontend.name,
+                                            path = %path,
+                                            error = %e,
+                                            "cannot open access log file — logging disabled for this frontend",
+                                        );
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
                     let http_proxy = Arc::new(HttpProxy::new(
                         frontend.clone(),
-                        self.config.security.headers.clone(),
+                        eff_headers,
                         waf,
                         pipeline.clone(),
                         path_acl,
-                        self.config.security.bot_detection.clone(),
-                        self.config.security.tls.hsts_max_age,
-                        self.config.security.tls.hsts_include_subdomains,
+                        eff_bot,
+                        eff_hsts_max_age,
+                        eff_hsts_subdomains,
                         rate_limiters.clone(),
-                        self.config.security.cookies.clone(),
+                        eff_cookies,
+                        log_writer,
+                        eff_log_format,
+                        self.config.security.acl.acl_bypass_waf,
+                        self.config.security.acl.domain.allow.clone(),
+                        self.config.security.acl.domain.block.clone(),
                     ));
 
                     let rx = shutdown_rx.clone();
@@ -291,7 +446,7 @@ impl Server {
                     cert_store.add_from_cert(certified_key.clone());
                     cert_store.set_default(certified_key);
 
-                    let acceptor = build_tls_acceptor(cert_store)
+                    let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
                         .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
 
                     let listener = TlsListenerTask::new(
@@ -303,8 +458,15 @@ impl Server {
 
                     let rx = shutdown_rx.clone();
                     let frontend_name = frontend.name.clone();
+                    let smtp_headers = frontend.smtp_headers.clone();
                     let pipeline = pipeline.clone();
-                    let antispam_pipeline = build_antispam_pipeline(&self.config.antispam);
+                    let effective_antispam: std::borrow::Cow<AntispamConfig> =
+                        resolve_antispam_for_profile(
+                            &self.config.antispam,
+                            frontend.security_profile.as_deref(),
+                            &self.config.security_profiles,
+                        );
+                    let antispam_pipeline = build_antispam_pipeline(&effective_antispam);
                     let allow_list = build_allow_list(&self.config.antispam);
                     let block_list = build_block_list(&self.config.antispam);
                     let hostname = self.config.global.daemon_name.clone();
@@ -318,6 +480,7 @@ impl Server {
                             block_list,
                             hostname,
                             &frontend_name,
+                            smtp_headers,
                             rx,
                         ).await {
                             tracing::error!(
@@ -345,8 +508,15 @@ impl Server {
 
                     let rx = shutdown_rx.clone();
                     let frontend_name = frontend.name.clone();
+                    let smtp_headers = frontend.smtp_headers.clone();
                     let pipeline = pipeline.clone();
-                    let antispam_pipeline = build_antispam_pipeline(&self.config.antispam);
+                    let effective_antispam: std::borrow::Cow<AntispamConfig> =
+                        resolve_antispam_for_profile(
+                            &self.config.antispam,
+                            frontend.security_profile.as_deref(),
+                            &self.config.security_profiles,
+                        );
+                    let antispam_pipeline = build_antispam_pipeline(&effective_antispam);
                     let allow_list = build_allow_list(&self.config.antispam);
                     let block_list = build_block_list(&self.config.antispam);
                     let hostname = self.config.global.daemon_name.clone();
@@ -360,6 +530,7 @@ impl Server {
                             block_list,
                             hostname,
                             &frontend_name,
+                            smtp_headers,
                             rx,
                         ).await {
                             tracing::error!(
@@ -451,7 +622,7 @@ async fn handle_tcp_connection(
     // Connect to backend
     let backend_stream = if backend.tls {
         // TLS backend - we need to wrap the stream
-        match RequestPipeline::connect_backend_tls(&backend).await {
+        match pipeline.connect_backend_tls(&backend).await {
             Ok(tls_stream) => {
                 // Proxy with TLS backend
                 let start = std::time::Instant::now();
@@ -742,6 +913,28 @@ fn build_balancer(method: BalanceMethod) -> Box<dyn LoadBalancer> {
     }
 }
 
+/// Resolve the effective antispam config for an SMTP frontend, applying any
+/// per-profile overrides (thresholds, antivirus) on top of the global config.
+fn resolve_antispam_for_profile<'a>(
+    global: &'a AntispamConfig,
+    profile_name: Option<&str>,
+    profiles: &'a [serverwall_core::config::schema::SecurityProfile],
+) -> std::borrow::Cow<'a, AntispamConfig> {
+    if let Some(pname) = profile_name {
+        if let Some(p) = profiles.iter().find(|p| p.name == pname) {
+            if let Some(ref pa) = p.antispam {
+                let mut cfg = global.clone();
+                cfg.enabled = pa.enabled;
+                if let Some(t) = pa.possible_spam_threshold { cfg.possible_spam_threshold = t; }
+                if let Some(t) = pa.definite_spam_threshold { cfg.definite_spam_threshold = t; }
+                cfg.antivirus = pa.antivirus.clone();
+                return std::borrow::Cow::Owned(cfg);
+            }
+        }
+    }
+    std::borrow::Cow::Borrowed(global)
+}
+
 /// Build antispam pipeline from config, wiring all enabled checks.
 fn build_antispam_pipeline(config: &AntispamConfig) -> Arc<AntispamPipeline> {
     if !config.enabled {
@@ -906,6 +1099,7 @@ async fn run_smtps_frontend(
     block_list: Arc<BlockList>,
     hostname: String,
     frontend_name: &str,
+    smtp_headers: serverwall_core::config::schema::SmtpHeadersConfig,
     shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let name = frontend_name.to_string();
@@ -919,6 +1113,7 @@ async fn run_smtps_frontend(
                 let wl = allow_list.clone();
                 let bl = block_list.clone();
                 let host = hostname.clone();
+                let smtp_hdrs = smtp_headers.clone();
 
                 async move {
                     // Check ACL
@@ -954,6 +1149,7 @@ async fn run_smtps_frontend(
                         bl,
                         host,
                         ja3.clone(),
+                        smtp_hdrs,
                     );
 
                     match proxy.proxy(tls_stream, peer_addr).await {
@@ -1003,6 +1199,7 @@ async fn run_smtp_starttls_frontend(
     block_list: Arc<BlockList>,
     hostname: String,
     frontend_name: &str,
+    smtp_headers: serverwall_core::config::schema::SmtpHeadersConfig,
     shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let name = frontend_name.to_string();
@@ -1015,6 +1212,7 @@ async fn run_smtp_starttls_frontend(
                 let antispam = antispam_pipeline.clone();
                 let wl = allow_list.clone();
                 let bl = block_list.clone();
+                let smtp_hdrs = smtp_headers.clone();
                 let host = hostname.clone();
 
                 async move {
@@ -1051,6 +1249,7 @@ async fn run_smtp_starttls_frontend(
                         bl,
                         host,
                         None, // No TLS at the listener level for STARTTLS
+                        smtp_hdrs,
                     );
 
                     match proxy.proxy(tcp_stream, peer_addr).await {
@@ -1131,7 +1330,7 @@ fn build_relay(
                 config.outbound_policy.max_messages_per_domain_per_hour,
             ),
             content_policy: OutboundContentPolicy::new(&config.outbound_policy),
-            spf_alignment: SpfAlignmentCheck::new(vec![]),
+            spf_alignment: SpfAlignmentCheck::new(config.outbound_policy.allowed_sender_domains.clone()),
             recipient_limit: RecipientLimit::new(
                 config.outbound_policy.max_recipients_per_message,
             ),

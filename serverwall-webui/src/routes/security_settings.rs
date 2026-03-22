@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use serverwall_core::config::schema::{
-    BotDetectionConfig, CookieSecurityConfig, GeoConfig, RateLimitConfig, SecurityHeadersConfig,
-    SecurityTlsConfig,
+    BotDetectionConfig, CookieSecurityConfig, GeoConfig, RateLimitConfig, RateLimitScope,
+    SecurityHeadersConfig, SecurityTlsConfig,
 };
 use serverwall_core::{config::editor, send_reload_signal, DEFAULT_PID_FILE};
 
@@ -23,6 +23,7 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "tls": {
             "min_version": s.tls.min_version,
+            "cipher_suites": s.tls.cipher_suites,
             "ocsp_stapling": s.tls.ocsp_stapling,
             "hsts_max_age": s.tls.hsts_max_age,
             "hsts_include_subdomains": s.tls.hsts_include_subdomains,
@@ -48,6 +49,7 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
             "challenge_suspicious": s.bot_detection.challenge_suspicious,
             "known_good_bots": s.bot_detection.known_good_bots,
             "verify_good_bots": s.bot_detection.verify_good_bots,
+            "ja3_fingerprint_block_list": s.bot_detection.ja3_fingerprint_block_list,
         },
         "cookies": {
             "enforce_secure_flag": s.cookies.enforce_secure_flag,
@@ -61,6 +63,7 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
             "requests": r.requests,
             "window_secs": r.window_secs,
             "burst": r.burst,
+            "scope": r.scope.as_ref().and_then(|s| serde_json::to_value(s).ok()),
         })).collect::<Vec<_>>(),
     }))
 }
@@ -72,6 +75,7 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
 #[derive(Deserialize)]
 pub struct TlsBody {
     pub min_version: Option<String>,
+    pub cipher_suites: Option<Vec<String>>,
     pub ocsp_stapling: Option<bool>,
     pub hsts_max_age: Option<Option<u64>>,
     pub hsts_include_subdomains: Option<bool>,
@@ -90,6 +94,7 @@ pub async fn put_tls(
     };
     let updated = SecurityTlsConfig {
         min_version: body.min_version.unwrap_or(current.min_version),
+        cipher_suites: body.cipher_suites.unwrap_or(current.cipher_suites),
         ocsp_stapling: body.ocsp_stapling.unwrap_or(current.ocsp_stapling),
         hsts_max_age: body.hsts_max_age.unwrap_or(current.hsts_max_age),
         hsts_include_subdomains: body.hsts_include_subdomains.unwrap_or(current.hsts_include_subdomains),
@@ -97,7 +102,6 @@ pub async fn put_tls(
         backend_ca_bundle: body.backend_ca_bundle
             .map(|v| v.map(std::path::PathBuf::from))
             .unwrap_or(current.backend_ca_bundle),
-        cipher_suites: current.cipher_suites,
     };
     apply(editor::update_security_tls(&state.config_path, updated), &state)
 }
@@ -178,6 +182,7 @@ pub struct BotBody {
     pub challenge_suspicious: Option<bool>,
     pub known_good_bots: Option<Vec<String>>,
     pub verify_good_bots: Option<bool>,
+    pub ja3_fingerprint_block_list: Option<Vec<String>>,
 }
 
 /// PUT /api/security/bot
@@ -194,7 +199,7 @@ pub async fn put_bot(
         challenge_suspicious: body.challenge_suspicious.unwrap_or(current.challenge_suspicious),
         known_good_bots: body.known_good_bots.unwrap_or(current.known_good_bots),
         verify_good_bots: body.verify_good_bots.unwrap_or(current.verify_good_bots),
-        ja3_fingerprint_block_list: current.ja3_fingerprint_block_list,
+        ja3_fingerprint_block_list: body.ja3_fingerprint_block_list.unwrap_or(current.ja3_fingerprint_block_list),
     };
     apply(editor::update_security_bot(&state.config_path, updated), &state)
 }
@@ -240,6 +245,7 @@ pub struct RateLimitBody {
     pub requests: u64,
     pub window_secs: u64,
     pub burst: Option<u64>,
+    pub scope: Option<RateLimitScope>,
 }
 
 /// POST /api/security/rate-limits
@@ -253,7 +259,7 @@ pub async fn add_rate_limit(
         requests: body.requests,
         window_secs: body.window_secs,
         burst: body.burst,
-        scope: None,
+        scope: body.scope,
     };
     apply(editor::add_security_rate_limit(&state.config_path, rule), &state)
 }

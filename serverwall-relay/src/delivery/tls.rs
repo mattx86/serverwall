@@ -18,7 +18,11 @@ pub struct OutboundTls {
 impl OutboundTls {
     /// Build from relay TLS config.
     pub fn new(config: &RelayTlsConfig) -> Result<Self> {
-        let mut tls_config = ClientConfig::builder()
+        let versions: &[&rustls::SupportedProtocolVersion] = match config.min_version.as_str() {
+            "1.3" => &[&rustls::version::TLS13],
+            _     => &[&rustls::version::TLS13, &rustls::version::TLS12],
+        };
+        let mut tls_config = ClientConfig::builder_with_protocol_versions(versions)
             .with_root_certificates(Self::root_store())
             .with_no_client_auth();
 

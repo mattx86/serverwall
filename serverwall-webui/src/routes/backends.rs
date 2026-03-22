@@ -7,10 +7,30 @@ use axum::{
 };
 use serde_json::{json, Value};
 
-use serverwall_core::config::schema::BackendPoolConfig;
+use serverwall_core::config::schema::{BackendConfig, BackendPoolConfig};
 use serverwall_core::{config::editor, send_reload_signal, DEFAULT_PID_FILE};
 
 use crate::state::AppState;
+
+fn enum_str<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|j| j.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+fn backend_json(b: &serverwall_core::config::schema::BackendConfig) -> Value {
+    json!({
+        "name": b.name,
+        "address": b.address,
+        "weight": b.weight,
+        "tls": b.tls,
+        "tls_verify": b.tls_verify,
+        "tls_sni": b.tls_sni,
+        "max_connections": b.max_connections,
+        "enabled": b.enabled,
+    })
+}
 
 /// GET /api/backends - list all backend pools
 pub async fn list(State(state): State<AppState>) -> Json<Value> {
@@ -19,25 +39,14 @@ pub async fn list(State(state): State<AppState>) -> Json<Value> {
         .backend_pool
         .iter()
         .map(|pool| {
-            let backends: Vec<Value> = pool
-                .backend
-                .iter()
-                .map(|b| {
-                    json!({
-                        "name": b.name,
-                        "address": b.address,
-                        "weight": b.weight,
-                        "tls": b.tls,
-                        "enabled": b.enabled,
-                    })
-                })
-                .collect();
+            let backends: Vec<Value> = pool.backend.iter().map(backend_json).collect();
 
             json!({
                 "name": pool.name,
                 "health_check_interval": pool.health_check_interval,
                 "health_check_timeout": pool.health_check_timeout,
-                "health_check_type": format!("{:?}", pool.health_check_type).to_lowercase(),
+                "health_check_type": enum_str(&pool.health_check_type),
+                "health_check_method": pool.health_check_method,
                 "health_check_path": pool.health_check_path,
                 "backend_count": pool.backend.len(),
                 "backends": backends,
@@ -58,26 +67,15 @@ pub async fn get(
 
     match pool {
         Some(p) => {
-            let backends: Vec<Value> = p
-                .backend
-                .iter()
-                .map(|b| {
-                    json!({
-                        "name": b.name,
-                        "address": b.address,
-                        "weight": b.weight,
-                        "tls": b.tls,
-                        "enabled": b.enabled,
-                    })
-                })
-                .collect();
+            let backends: Vec<Value> = p.backend.iter().map(backend_json).collect();
 
             (
                 StatusCode::OK,
                 Json(json!({
                     "pool": {
                         "name": p.name,
-                        "health_check_type":        format!("{:?}", p.health_check_type).to_lowercase(),
+                        "health_check_type":        enum_str(&p.health_check_type),
+                        "health_check_method":      p.health_check_method,
                         "health_check_interval":    p.health_check_interval,
                         "health_check_timeout":     p.health_check_timeout,
                         "health_check_path":        p.health_check_path,
@@ -179,5 +177,36 @@ pub async fn delete(
             StatusCode::NOT_FOUND,
             Json(json!({"error": e.to_string()})),
         ),
+    }
+}
+
+/// POST /api/backends/:pool/servers — add an individual backend server to a pool
+pub async fn add_server(
+    State(state): State<AppState>,
+    Path(pool_name): Path<String>,
+    Json(backend): Json<BackendConfig>,
+) -> (StatusCode, Json<Value>) {
+    match editor::add_backend(&state.config_path, &pool_name, backend) {
+        Ok(()) => {
+            state.reload_config();
+            let _ = send_reload_signal(&PathBuf::from(DEFAULT_PID_FILE));
+            (StatusCode::CREATED, Json(json!({"created": true})))
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))),
+    }
+}
+
+/// DELETE /api/backends/:pool/servers/:name — remove an individual backend server by name
+pub async fn remove_server(
+    State(state): State<AppState>,
+    Path((pool_name, backend_name)): Path<(String, String)>,
+) -> (StatusCode, Json<Value>) {
+    match editor::remove_backend(&state.config_path, &pool_name, &backend_name) {
+        Ok(()) => {
+            state.reload_config();
+            let _ = send_reload_signal(&PathBuf::from(DEFAULT_PID_FILE));
+            (StatusCode::OK, Json(json!({"deleted": true})))
+        }
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({"error": e.to_string()}))),
     }
 }

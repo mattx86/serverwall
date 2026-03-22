@@ -70,23 +70,13 @@ pub async fn update(
         }
     }
 
-    // Remove existing entry then add updated one.
-    if let Err(e) = editor::remove_frontend(&state.config_path, &name) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        );
-    }
-    match editor::add_frontend(&state.config_path, frontend) {
+    match editor::update_frontend(&state.config_path, &name, frontend) {
         Ok(()) => {
             state.reload_config();
             let _ = send_reload_signal(&PathBuf::from(DEFAULT_PID_FILE));
             (StatusCode::OK, Json(json!({"updated": true})))
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("frontend removed but recreation failed: {}", e)})),
-        ),
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({"error": e.to_string()}))),
     }
 }
 
@@ -108,6 +98,13 @@ pub async fn delete(
     }
 }
 
+fn enum_str<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|j| j.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
 /// GET /api/frontends - list all frontends
 pub async fn list(State(state): State<AppState>) -> Json<Value> {
     let config = state.config.load();
@@ -117,16 +114,20 @@ pub async fn list(State(state): State<AppState>) -> Json<Value> {
         .map(|f| {
             json!({
                 "name": f.name,
-                "protocol": format!("{:?}", f.protocol).to_lowercase(),
+                "protocol": enum_str(&f.protocol),
                 "listen": f.listen,
                 "backend_pool": f.backend_pool,
-                "balancer": format!("{:?}", f.balancer).to_lowercase(),
+                "balancer": enum_str(&f.balancer),
                 "session_cookie": f.session_cookie,
                 "waf_enabled": f.waf_enabled,
                 "waf_ruleset": f.waf_ruleset,
+                "security_profile": f.security_profile,
+                "tls_profile": f.tls_profile,
                 "tls_min_version": f.tls_min_version,
+                "access_log": f.access_log,
                 "log_file": f.log_file,
-                "log_format": format!("{:?}", f.log_format).to_lowercase(),
+                "log_format": enum_str(&f.log_format),
+                "log_profile": f.log_profile,
                 "max_connections": f.max_connections,
             })
         })
@@ -149,28 +150,45 @@ pub async fn get(
             Json(json!({
                 "frontend": {
                     "name": f.name,
-                    "protocol": format!("{:?}", f.protocol).to_lowercase(),
+                    "protocol": enum_str(&f.protocol),
                     "listen": f.listen,
                     "backend_pool": f.backend_pool,
-                    "balancer": format!("{:?}", f.balancer).to_lowercase(),
+                    "balancer": enum_str(&f.balancer),
                     "session_cookie": f.session_cookie,
                     "waf_enabled": f.waf_enabled,
                     "waf_ruleset": f.waf_ruleset,
-                    "tls_min_version": f.tls_min_version,
-                    "log_file": f.log_file,
-                    "log_format": format!("{:?}", f.log_format).to_lowercase(),
-                    "max_connections": f.max_connections,
+                    "security_profile": f.security_profile,
+                    "tls_profile": f.tls_profile,
                     "tls_cert": f.tls_cert,
+                    "tls_chain": f.tls_chain,
                     "tls_key": f.tls_key,
+                    "tls_key_password": f.tls_key_password,
+                    "tls_pfx": f.tls_pfx,
+                    "tls_pfx_password": f.tls_pfx_password,
+                    "tls_min_version": f.tls_min_version,
+                    "tls_ciphers": f.tls_ciphers,
+                    "access_log": f.access_log,
+                    "log_file": f.log_file,
+                    "log_format": enum_str(&f.log_format),
+                    "log_profile": f.log_profile,
+                    "max_connections": f.max_connections,
                     "headers": {
                         "x_forwarded_for": f.headers.x_forwarded_for,
                         "x_real_ip": f.headers.x_real_ip,
                         "x_forwarded_proto": f.headers.x_forwarded_proto,
+                        "x_forwarded_host": f.headers.x_forwarded_host,
+                        "x_forwarded_port": f.headers.x_forwarded_port,
+                        "x_request_id": f.headers.x_request_id,
+                        "custom": f.headers.custom,
+                    },
+                    "smtp_headers": {
+                        "add_received": f.smtp_headers.add_received,
+                        "x_forwarded_for": f.smtp_headers.x_forwarded_for,
                     },
                     "acl": {
                         "allow_list": f.acl.allow_list,
                         "block_list": f.acl.block_list,
-                        "default_action": format!("{:?}", f.acl.default_action).to_lowercase(),
+                        "default_action": enum_str(&f.acl.default_action),
                     },
                 }
             })),

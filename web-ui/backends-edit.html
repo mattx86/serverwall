@@ -33,11 +33,11 @@
       <div class="form-grid">
         <div class="form-group">
           <label>Health Check Type</label>
-          <select id="pHcType">
-            <option value="tcp">TCP</option>
-            <option value="http">HTTP</option>
+          <select id="pHcType" onchange="updateHcFields()">
+            <option value="http" selected>HTTP</option>
             <option value="smtp">SMTP</option>
             <option value="imap">IMAP</option>
+            <option value="tcp">TCP</option>
           </select>
         </div>
         <div class="form-group">
@@ -48,16 +48,16 @@
           <label>Health Check Timeout</label>
           <input type="text" id="pHcTimeout" placeholder="3s">
         </div>
-        <div class="form-group">
-          <label>Health Check Path (HTTP)</label>
+        <div class="form-group" id="hcPathGroup">
+          <label>Health Check Path</label>
           <input type="text" id="pHcPath" placeholder="/health">
         </div>
-        <div class="form-group">
+        <div class="form-group" id="hcExpectGroup">
           <label>Expected HTTP Status</label>
           <input type="number" id="pHcExpect" min="100" max="599" placeholder="200">
         </div>
       </div>
-      <div style="margin-top:.4rem;display:flex;gap:1.2rem;flex-wrap:wrap">
+      <div style="margin-top:.4rem;display:flex;gap:1.2rem;flex-wrap:wrap" id="hcTlsGroup">
         <label class="form-check"><input type="checkbox" id="pHcTls"> HC TLS</label>
         <label class="form-check"><input type="checkbox" id="pHcIgnoreCert"> HC Ignore Cert</label>
       </div>
@@ -107,13 +107,14 @@ async function loadPool() {
     if (!r.ok) { showError(d.error || 'Failed to load pool'); return; }
     var p = d.pool;
 
-    document.getElementById('pHcType').value     = p.health_check_type    || 'tcp';
+    document.getElementById('pHcType').value     = p.health_check_type    || 'http';
     document.getElementById('pHcInterval').value = p.health_check_interval|| '10s';
     document.getElementById('pHcTimeout').value  = p.health_check_timeout || '3s';
     document.getElementById('pHcPath').value     = p.health_check_path    || '';
     document.getElementById('pHcExpect').value   = p.health_check_expect  != null ? p.health_check_expect : 200;
     document.getElementById('pHcTls').checked        = !!p.health_check_tls;
     document.getElementById('pHcIgnoreCert').checked = !!p.health_check_ignore_cert;
+    updateHcFields();
 
     memberCount = 0;
     document.getElementById('memberRows').innerHTML = '';
@@ -207,6 +208,13 @@ function showError(msg) {
   var el = document.getElementById('loadError');
   el.textContent = msg;
   el.style.display = '';
+}
+
+function updateHcFields() {
+  var isHttp = document.getElementById('pHcType').value === 'http';
+  ['hcPathGroup','hcExpectGroup','hcTlsGroup'].forEach(function(id) {
+    document.getElementById(id).style.display = isHttp ? '' : 'none';
+  });
 }
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}

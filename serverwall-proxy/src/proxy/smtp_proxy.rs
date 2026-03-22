@@ -1,10 +1,11 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
+use serverwall_core::config::schema::SmtpHeadersConfig;
 use serverwall_core::logging::PostfixLogEntry;
 use serverwall_core::proto::smtp::{self, SmtpCommand};
 
@@ -53,6 +54,8 @@ pub struct SmtpProxy {
     hostname: String,
     /// JA3 TLS fingerprint for this connection (None for plaintext SMTP).
     ja3_fingerprint: Option<String>,
+    /// Controls which headers are injected into forwarded messages.
+    smtp_headers: SmtpHeadersConfig,
 }
 
 impl SmtpProxy {
@@ -64,6 +67,7 @@ impl SmtpProxy {
         block_list: Arc<BlockList>,
         hostname: String,
         ja3_fingerprint: Option<String>,
+        smtp_headers: SmtpHeadersConfig,
     ) -> Self {
         Self {
             backend_addr,
@@ -74,6 +78,7 @@ impl SmtpProxy {
             block_list,
             hostname,
             ja3_fingerprint,
+            smtp_headers,
         }
     }
 
@@ -321,7 +326,7 @@ impl SmtpProxy {
 
                         self.state = SmtpState::Proxying;
                         let backend_resp =
-                            self.forward_to_backend(&data_buffer, &mail_from, &rcpt_to, &report).await;
+                            self.forward_to_backend(&data_buffer, &mail_from, &rcpt_to, &report, peer_addr.ip()).await;
                         match backend_resp {
                             Ok((resp_text, b2c)) => {
                                 bytes_from_backend += b2c;
@@ -416,7 +421,7 @@ impl SmtpProxy {
                                     // Forward to backend with headers.
                                     self.state = SmtpState::Proxying;
                                     let backend_resp =
-                                        self.forward_to_backend(&data_buffer, &mail_from, &rcpt_to, &report).await;
+                                        self.forward_to_backend(&data_buffer, &mail_from, &rcpt_to, &report, peer_addr.ip()).await;
                                     match backend_resp {
                                         Ok((resp_text, b2c)) => {
                                             bytes_from_backend += b2c;
@@ -526,6 +531,7 @@ impl SmtpProxy {
         mail_from: &str,
         rcpt_to: &[String],
         report: &serverwall_antispam::result::SpamReport,
+        client_ip: IpAddr,
     ) -> std::io::Result<(String, u64)> {
         let mut backend = TcpStream::connect(self.backend_addr).await?;
         let mut backend_reader = BufReader::new(&mut backend);
@@ -580,15 +586,21 @@ impl SmtpProxy {
         let header_builder = SpamHeaderBuilder::new();
         let mut injected_headers = Vec::new();
 
-        // Always add Received header. The backend tag is an opaque identifier
-        // that lets operators correlate sessions without exposing backend addresses.
-        let received = format!(
-            "Received: from unknown by {} (id={}); {}",
-            self.hostname,
-            self.backend_tag,
-            chrono::Utc::now().to_rfc2822(),
-        );
-        injected_headers.push(("Received".to_string(), received));
+        // Received header (gated on smtp_headers.add_received, default: true).
+        if self.smtp_headers.add_received {
+            let received = format!(
+                "Received: from unknown by {} (id={}); {}",
+                self.hostname,
+                self.backend_tag,
+                chrono::Utc::now().to_rfc2822(),
+            );
+            injected_headers.push(("Received".to_string(), received));
+        }
+
+        // X-Forwarded-For header (gated on smtp_headers.x_forwarded_for, default: false).
+        if self.smtp_headers.x_forwarded_for {
+            injected_headers.push(("X-Forwarded-For".to_string(), client_ip.to_string()));
+        }
 
         match report.verdict {
             SpamVerdict::Suspect => {

@@ -14,9 +14,15 @@ services:
       - "80:80"       # ServerWall frontend (proxy to nginx)
       - "8443:8443"   # ServerWall WebUI
     volumes:
-      - serverwall-test-data:/opt/serverwall
+      # Mount only persistent data dirs — never /opt/serverwall/bin so that
+      # rebuilt binaries in the image are always used, not stale volume copies.
+      - serverwall-test-etc:/opt/serverwall/etc
+      - serverwall-test-var:/opt/serverwall/var
+      - serverwall-test-run:/opt/serverwall/run
     environment:
       - RUST_LOG=info
 
 volumes:
-  serverwall-test-data:
+  serverwall-test-etc:
+  serverwall-test-var:
+  serverwall-test-run:

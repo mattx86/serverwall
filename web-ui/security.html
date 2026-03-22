@@ -10,7 +10,7 @@
 .tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
 .tab.active{color:var(--text);border-bottom-color:var(--accent)}
 .tab-panel{display:none}.tab-panel.active{display:block}
-.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
 .toggle-row:last-of-type{border-bottom:none}
 .toggle-label{font-size:.88rem}
 .toggle-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
@@ -87,6 +87,10 @@
             <div class="toggle-sub">Validate certificates when connecting to backends over TLS</div>
           </div>
           <label class="switch"><input type="checkbox" id="tlsBackendVerify"><span class="slider"></span></label>
+        </div>
+        <div class="form-group" style="margin-top:1rem;max-width:640px">
+          <label>Allowed Cipher Suites (one per line, blank = rustls defaults)</label>
+          <textarea id="tlsCiphers" rows="4" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="TLS_AES_256_GCM_SHA384&#10;TLS_CHACHA20_POLY1305_SHA256"></textarea>
         </div>
         <div class="save-row">
           <button class="btn btn-primary" onclick="saveTls()">Save TLS Settings</button>
@@ -227,6 +231,11 @@
             <button class="btn btn-sm btn-primary" onclick="addGoodBot()">Add</button>
           </div>
         </div>
+        <div class="form-group" style="margin-top:1rem;max-width:640px">
+          <label>JA3 TLS Fingerprint Block List (one per line)</label>
+          <textarea id="botJa3" rows="4" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="abc123..."></textarea>
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.25rem">Block connections by their JA3 TLS fingerprint hash.</div>
+        </div>
         <div class="save-row">
           <button class="btn btn-primary" onclick="saveBot()">Save Bot Settings</button>
           <span class="save-ok" id="botOk">Saved.</span>
@@ -346,6 +355,7 @@ async function loadSettings() {
     document.getElementById('tlsHstsSubs').checked = !!d.tls.hsts_include_subdomains;
     document.getElementById('tlsOcsp').checked = !!d.tls.ocsp_stapling;
     document.getElementById('tlsBackendVerify').checked = !!d.tls.backend_tls_verify;
+    document.getElementById('tlsCiphers').value = (d.tls.cipher_suites || []).join('\n');
 
     // GeoIP
     _geo.block_countries = d.geo.block_countries || [];
@@ -368,6 +378,7 @@ async function loadSettings() {
     document.getElementById('botVerify').checked = !!d.bot_detection.verify_good_bots;
     _bot.known_good_bots = d.bot_detection.known_good_bots || [];
     renderGoodBots();
+    document.getElementById('botJa3').value = (d.bot_detection.ja3_fingerprint_block_list || []).join('\n');
 
     // Cookies
     document.getElementById('ckSecure').checked = !!d.cookies.enforce_secure_flag;
@@ -474,12 +485,15 @@ function flash(okId, errId, ok, msg) {
 
 async function saveTls() {
   var hsts = parseInt(document.getElementById('tlsHstsMaxAge').value)||0;
+  var cipherRaw = document.getElementById('tlsCiphers').value;
+  var ciphers = cipherRaw.split('\n').map(function(s){return s.trim();}).filter(Boolean);
   var body = {
     min_version: document.getElementById('tlsMinVersion').value,
     ocsp_stapling: document.getElementById('tlsOcsp').checked,
     hsts_max_age: hsts > 0 ? hsts : null,
     hsts_include_subdomains: document.getElementById('tlsHstsSubs').checked,
     backend_tls_verify: document.getElementById('tlsBackendVerify').checked,
+    cipher_suites: ciphers.length > 0 ? ciphers : null,
   };
   try {
     var r = await fetch('/api/security/tls', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
@@ -523,11 +537,14 @@ async function saveHeaders() {
 }
 
 async function saveBot() {
+  var ja3Raw = document.getElementById('botJa3').value;
+  var ja3List = ja3Raw.split('\n').map(function(s){return s.trim();}).filter(Boolean);
   var body = {
     enabled: document.getElementById('botEnabled').checked,
     challenge_suspicious: document.getElementById('botChallenge').checked,
     verify_good_bots: document.getElementById('botVerify').checked,
     known_good_bots: _bot.known_good_bots,
+    ja3_fingerprint_block_list: ja3List,
   };
   try {
     var r = await fetch('/api/security/bot', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});

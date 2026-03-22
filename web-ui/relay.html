@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Relay</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1.2rem}
+.tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
+.tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
+.toggle-row:last-of-type{border-bottom:none}
+.toggle-label{font-size:.88rem}
+.toggle-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
+.tag-list{display:flex;flex-wrap:wrap;gap:.35rem;margin:.4rem 0}
+.tag{display:inline-flex;align-items:center;gap:.3rem;background:rgba(255,255,255,.07);border-radius:3px;padding:.18rem .45rem;font-size:.8rem}
+.tag button{background:none;border:none;color:var(--muted);cursor:pointer;padding:0;line-height:1;font-size:.85rem}
+.tag button:hover{color:var(--danger,#f87171)}
+.add-inline{display:flex;gap:.4rem;margin-top:.4rem}
+.add-inline input{flex:1}
+.save-row{margin-top:1.2rem;display:flex;gap:.6rem;align-items:center}
+.save-ok{color:var(--success,#4ade80);font-size:.82rem;display:none}
+.save-err{color:var(--danger,#f87171);font-size:.82rem;display:none}
+.dkim-table{width:100%;border-collapse:collapse;font-size:.85rem;margin-top:.6rem}
+.dkim-table th{text-align:left;padding:.3rem .5rem;font-size:.75rem;color:var(--muted);font-weight:500}
+.dkim-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">Relay</h2>
+    </div>
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('general')">General</div>
+      <div class="tab" onclick="switchTab('trusted')">Trusted Hosts</div>
+      <div class="tab" onclick="switchTab('tls')">TLS</div>
+      <div class="tab" onclick="switchTab('dkim')">DKIM</div>
+    </div>
+
+    <!-- General tab -->
+    <div id="tab-general" class="tab-panel active">
+      <div class="form-panel">
+        <div class="toggle-row" style="margin-bottom:.8rem">
+          <div>
+            <div class="toggle-label">Relay Enabled</div>
+            <div class="toggle-sub">Enable outbound SMTP relay service</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="relayEnabled"><span class="slider"></span></label>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Listen Address</label>
+            <input type="text" id="relayListen" placeholder="0.0.0.0:587">
+          </div>
+          <div class="form-group">
+            <label>Hostname (EHLO)</label>
+            <input type="text" id="relayHostname" placeholder="mail.example.com">
+          </div>
+          <div class="form-group">
+            <label>Spool Directory</label>
+            <input type="text" id="relaySpoolDir" placeholder="/opt/serverwall/var/spool">
+          </div>
+          <div class="form-group">
+            <label>Max Queue Size</label>
+            <input type="number" id="relayMaxQueue" min="1" placeholder="10000">
+          </div>
+          <div class="form-group">
+            <label>Delivery Threads</label>
+            <input type="number" id="relayThreads" min="1" placeholder="4">
+          </div>
+        </div>
+        <div style="margin-top:1rem">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Max Message Size (bytes)</label>
+              <input type="number" id="relayMaxMsgSize" min="0" placeholder="26214400">
+            </div>
+            <div class="form-group">
+              <label>Max Recipients per Message</label>
+              <input type="number" id="relayMaxRecipients" min="1" placeholder="100">
+            </div>
+            <div class="form-group">
+              <label>Max Messages / Domain / Hour</label>
+              <input type="number" id="relayMaxPerDomain" min="0" placeholder="0 = unlimited">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Allowed Sender Domains</label>
+            <div class="tag-list" id="relayAllowedDomains"></div>
+            <div class="add-inline">
+              <input type="text" id="relayDomainInput" placeholder="example.com">
+              <button class="btn btn-sm btn-primary" onclick="addAllowedDomain()">Add</button>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:1rem">
+          <div style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.4rem">Retry Schedule</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Max Retry Age (minutes)</label>
+              <input type="number" id="relayRetryMaxAge" min="1" placeholder="2880">
+            </div>
+            <div class="form-group">
+              <label>Max Attempts</label>
+              <input type="number" id="relayRetryMaxAttempts" min="1" placeholder="20">
+            </div>
+          </div>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveGeneral()">Save General Settings</button>
+          <span class="save-ok" id="genOk">Saved.</span>
+          <span class="save-err" id="genErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trusted Hosts tab -->
+    <div id="tab-trusted" class="tab-panel">
+      <div class="form-panel">
+        <div class="toggle-row" style="margin-bottom:1rem">
+          <div>
+            <div class="toggle-label">Require TLS from Trusted Hosts</div>
+            <div class="toggle-sub">Reject plain-text SMTP connections from trusted hosts with 530</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="requireTls"><span class="slider"></span></label>
+        </div>
+        <div class="form-group">
+          <label>Trusted Hosts (IP or CIDR, one per line)</label>
+          <div class="tag-list" id="trustedHostList"></div>
+          <div class="add-inline">
+            <input type="text" id="trustedHostInput" placeholder="10.0.0.0/8">
+            <button class="btn btn-sm btn-primary" onclick="addTrustedHost()">Add</button>
+          </div>
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.3rem">Only these IPs/CIDRs may submit messages to the relay (no SMTP AUTH)</div>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveTrustedHosts()">Save Require-TLS Setting</button>
+          <span class="save-ok" id="thOk">Saved.</span>
+          <span class="save-err" id="thErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TLS tab -->
+    <div id="tab-tls" class="tab-panel">
+      <div class="form-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Opportunistic TLS</div>
+            <div class="toggle-sub">Use STARTTLS when available on outbound connections</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="relayTlsOpportunistic"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Verify Remote Certificates</div>
+            <div class="toggle-sub">Validate TLS certificates on outbound connections</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="relayTlsVerify"><span class="slider"></span></label>
+        </div>
+        <div class="form-group" style="margin-top:1rem">
+          <label>Minimum TLS Version</label>
+          <select id="relayTlsMinVersion">
+            <option value="1.2">TLS 1.2</option>
+            <option value="1.3">TLS 1.3 only</option>
+          </select>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveRelayConfig()">Save TLS Settings</button>
+          <span class="save-ok" id="tlsOk">Saved.</span>
+          <span class="save-err" id="tlsErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- DKIM tab -->
+    <div id="tab-dkim" class="tab-panel">
+      <div class="form-panel">
+        <p style="margin:0 0 .8rem;font-size:.85rem;color:var(--muted)">DKIM signing domains. Add a domain here after generating a DKIM key in <a href="/ui/dkim.html">Email Auth &rarr; DKIM Keys</a>.</p>
+        <table class="dkim-table">
+          <thead><tr><th>Domain</th><th>Selector</th><th>Algorithm</th><th>Key File</th></tr></thead>
+          <tbody id="dkimRows"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+var _relay = null;
+var _allowedDomains = [];
+
+function switchTab(name){
+  var tabs=['general','trusted','tls','dkim'];
+  document.querySelectorAll('.tab').forEach(function(t,i){t.classList.toggle('active',tabs[i]===name);});
+  document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
+  document.getElementById('tab-'+name).classList.add('active');
+}
+
+function flash(okId,errId,ok,msg){
+  var o=document.getElementById(okId),e=document.getElementById(errId);
+  if(ok){o.style.display='';e.style.display='none';setTimeout(function(){o.style.display='none';},2500);}
+  else{e.textContent=msg||'Save failed';e.style.display='';o.style.display='none';}
+}
+
+async function loadRelay(){
+  try{
+    var r=await fetch('/api/relay',{headers:authHeaders()});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    _relay=await r.json();
+    // General
+    document.getElementById('relayEnabled').checked=!!_relay.enabled;
+    document.getElementById('relayListen').value=(_relay.listen||[]).join(', ');
+    document.getElementById('relayHostname').value=_relay.hostname||'';
+    document.getElementById('relaySpoolDir').value=_relay.spool_dir||'';
+    document.getElementById('relayMaxQueue').value=_relay.max_queue_size||'';
+    document.getElementById('relayThreads').value=_relay.delivery_threads||'';
+    document.getElementById('relayMaxMsgSize').value=(_relay.outbound_policy||{}).max_message_size||'';
+    document.getElementById('relayMaxRecipients').value=(_relay.outbound_policy||{}).max_recipients_per_message||'';
+    document.getElementById('relayMaxPerDomain').value=(_relay.outbound_policy||{}).max_messages_per_domain_per_hour||'';
+    _allowedDomains=((_relay.outbound_policy||{}).allowed_sender_domains)||[];
+    renderAllowedDomains();
+    document.getElementById('relayRetryMaxAge').value=(_relay.retry||{}).max_age||'';
+    document.getElementById('relayRetryMaxAttempts').value=(_relay.retry||{}).max_attempts||'';
+    // Trusted hosts
+    document.getElementById('requireTls').checked=!!((_relay.trusted_hosts||{}).require_tls);
+    renderTrustedHosts((_relay.trusted_hosts||{}).hosts||[]);
+    // TLS
+    document.getElementById('relayTlsOpportunistic').checked=!!((_relay.tls||{}).opportunistic);
+    document.getElementById('relayTlsVerify').checked=!!((_relay.tls||{}).verify_certificates);
+    document.getElementById('relayTlsMinVersion').value=((_relay.tls||{}).min_version)||'1.2';
+    // DKIM
+    renderDkim((_relay.dkim||{}).domains||[]);
+  }catch(e){
+    document.getElementById('loadError').textContent='Failed to load relay config: '+e.message;
+    document.getElementById('loadError').style.display='';
+  }
+}
+
+function renderAllowedDomains(){
+  document.getElementById('relayAllowedDomains').innerHTML=_allowedDomains.map(function(d){
+    return '<span class="tag">'+esc(d)+'<button onclick="removeAllowedDomain(\''+esc(d)+'\')">&#x2715;</button></span>';
+  }).join('');
+}
+function addAllowedDomain(){
+  var v=document.getElementById('relayDomainInput').value.trim().toLowerCase();
+  if(!v)return;
+  if(!_allowedDomains.includes(v)){_allowedDomains.push(v);renderAllowedDomains();}
+  document.getElementById('relayDomainInput').value='';
+}
+function removeAllowedDomain(d){_allowedDomains=_allowedDomains.filter(function(x){return x!==d;});renderAllowedDomains();}
+
+var _trustedHosts=[];
+function renderTrustedHosts(hosts){
+  _trustedHosts=hosts;
+  document.getElementById('trustedHostList').innerHTML=_trustedHosts.map(function(h){
+    return '<span class="tag">'+esc(h)+'<button onclick="removeTrustedHost(\''+esc(h)+'\')">&#x2715;</button></span>';
+  }).join('');
+}
+async function addTrustedHost(){
+  var v=document.getElementById('trustedHostInput').value.trim();
+  if(!v)return;
+  try{
+    var r=await fetch('/api/relay/trusted-hosts',{method:'POST',headers:authHeaders(),body:JSON.stringify({host:v})});
+    var d=await r.json();
+    if(!r.ok){alert(d.error||'Failed');return;}
+    document.getElementById('trustedHostInput').value='';
+    loadRelay();
+  }catch(e){alert('Request failed');}
+}
+async function removeTrustedHost(host){
+  if(!confirm('Remove trusted host "'+host+'"?'))return;
+  try{
+    var r=await fetch('/api/relay/trusted-hosts/'+encodeURIComponent(host),{method:'DELETE',headers:authHeaders()});
+    if(!r.ok){var d=await r.json();alert(d.error||'Failed');return;}
+    loadRelay();
+  }catch(e){alert('Request failed');}
+}
+
+function renderDkim(domains){
+  var tbody=document.getElementById('dkimRows');
+  if(!domains.length){tbody.innerHTML='<tr><td colspan="4" style="color:var(--muted);font-style:italic">No DKIM signing domains configured</td></tr>';return;}
+  tbody.innerHTML=domains.map(function(d){
+    return '<tr><td><strong>'+esc(d.domain)+'</strong></td><td>'+esc(d.selector||'')+'</td><td>'+esc(d.algorithm||'rsa')+'</td><td><code>'+esc(d.key_file||'')+'</code></td></tr>';
+  }).join('');
+}
+
+async function saveGeneral(){
+  if(!_relay)return;
+  var listen=document.getElementById('relayListen').value.trim();
+  var updated=Object.assign({},_relay,{
+    enabled:document.getElementById('relayEnabled').checked,
+    listen:listen?listen.split(',').map(function(s){return s.trim();}):_relay.listen,
+    hostname:document.getElementById('relayHostname').value.trim()||_relay.hostname,
+    spool_dir:document.getElementById('relaySpoolDir').value.trim()||_relay.spool_dir,
+    max_queue_size:parseInt(document.getElementById('relayMaxQueue').value)||_relay.max_queue_size,
+    delivery_threads:parseInt(document.getElementById('relayThreads').value)||_relay.delivery_threads,
+    outbound_policy:Object.assign({},_relay.outbound_policy,{
+      max_message_size:parseInt(document.getElementById('relayMaxMsgSize').value)||(_relay.outbound_policy||{}).max_message_size,
+      max_recipients_per_message:parseInt(document.getElementById('relayMaxRecipients').value)||(_relay.outbound_policy||{}).max_recipients_per_message,
+      max_messages_per_domain_per_hour:parseInt(document.getElementById('relayMaxPerDomain').value)||0,
+      allowed_sender_domains:_allowedDomains,
+    }),
+    retry:Object.assign({},_relay.retry,{
+      max_age:parseInt(document.getElementById('relayRetryMaxAge').value)||(_relay.retry||{}).max_age,
+      max_attempts:parseInt(document.getElementById('relayRetryMaxAttempts').value)||(_relay.retry||{}).max_attempts,
+    }),
+  });
+  try{
+    var r=await fetch('/api/relay',{method:'PUT',headers:authHeaders(),body:JSON.stringify(updated)});
+    var d=await r.json();
+    flash('genOk','genErr',r.ok,d.error);
+    if(r.ok)loadRelay();
+  }catch(e){flash('genOk','genErr',false,'Request failed');}
+}
+
+async function saveTrustedHosts(){
+  if(!_relay)return;
+  var updated=Object.assign({},_relay,{
+    trusted_hosts:{hosts:_trustedHosts,require_tls:document.getElementById('requireTls').checked}
+  });
+  try{
+    var r=await fetch('/api/relay',{method:'PUT',headers:authHeaders(),body:JSON.stringify(updated)});
+    var d=await r.json();
+    flash('thOk','thErr',r.ok,d.error);
+  }catch(e){flash('thOk','thErr',false,'Request failed');}
+}
+
+async function saveRelayConfig(){
+  if(!_relay)return;
+  var updated=Object.assign({},_relay,{
+    tls:{
+      opportunistic:document.getElementById('relayTlsOpportunistic').checked,
+      verify_certificates:document.getElementById('relayTlsVerify').checked,
+      min_version:document.getElementById('relayTlsMinVersion').value,
+    }
+  });
+  try{
+    var r=await fetch('/api/relay',{method:'PUT',headers:authHeaders(),body:JSON.stringify(updated)});
+    var d=await r.json();
+    flash('tlsOk','tlsErr',r.ok,d.error);
+  }catch(e){flash('tlsOk','tlsErr',false,'Request failed');}
+}
+
+initPage('relay');
+loadRelay();
+</script>
+</body>
+</html>

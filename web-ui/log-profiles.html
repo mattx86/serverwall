@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Logging Profiles</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
+.toggle-row:last-of-type{border-bottom:none}
+.toggle-label{font-size:.88rem}
+.toggle-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+
+    <div class="toolbar" id="lpToolbar">
+      <h2 style="margin:0;flex:1">Logging Profiles</h2>
+      <button class="btn btn-primary" id="addLpBtn" onclick="showAddForm()">+ Add Profile</button>
+    </div>
+
+    <!-- Add / Edit form -->
+    <div id="lpForm" class="form-panel" style="display:none">
+      <h3 id="lpFormTitle">Add Logging Profile</h3>
+      <input type="hidden" id="lpOrigName">
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Name *</label>
+          <input type="text" id="lpName" placeholder="e.g. json">
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" id="lpDesc" placeholder="Brief description">
+        </div>
+        <div class="form-group">
+          <label>Log Format</label>
+          <select id="lpFormat">
+            <option value="ApacheCombined">Apache Combined</option>
+            <option value="ApacheCustom">Apache Custom</option>
+            <option value="Postfix">Postfix</option>
+            <option value="Protocol">Protocol</option>
+            <option value="Json">JSON</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Access Log Enabled</div>
+          <div class="toggle-sub">Write per-request access log entries</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="lpAccessLog" checked><span class="slider"></span></label>
+      </div>
+
+      <div id="lpError" class="form-error" style="display:none;margin-top:.8rem"></div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="submitProfile()">Save Profile</button>
+        <button class="btn btn-secondary" onclick="hideForm()">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Profiles table -->
+    <table id="lpTable">
+      <thead>
+        <tr><th>Name</th><th>Description</th><th>Format</th><th>Access Log</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="lpBody">
+        <tr><td colspan="5">Loading...</td></tr>
+      </tbody>
+    </table>
+
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+var _lpData = {};
+
+var FORMAT_LABELS = {
+  'ApacheCombined': 'Apache Combined',
+  'ApacheCustom':   'Apache Custom',
+  'Postfix':        'Postfix',
+  'Protocol':       'Protocol',
+  'Json':           'JSON',
+};
+
+function showAddForm() {
+  clearForm();
+  document.getElementById('lpFormTitle').textContent = 'Add Logging Profile';
+  document.getElementById('lpOrigName').value = '';
+  document.getElementById('lpName').disabled = false;
+  document.getElementById('lpTable').style.display = 'none';
+  document.getElementById('addLpBtn').style.display = 'none';
+  document.getElementById('lpForm').style.display = '';
+  document.getElementById('lpError').style.display = 'none';
+}
+
+function showEditForm(p) {
+  clearForm();
+  document.getElementById('lpFormTitle').textContent = 'Edit Profile: ' + p.name;
+  document.getElementById('lpOrigName').value = p.name;
+  document.getElementById('lpName').value    = p.name;
+  document.getElementById('lpName').disabled = true;
+  document.getElementById('lpDesc').value    = p.description || '';
+  setSelectVal('lpFormat', p.format || 'ApacheCombined');
+  document.getElementById('lpAccessLog').checked = p.access_log !== false;
+  document.getElementById('lpTable').style.display = 'none';
+  document.getElementById('addLpBtn').style.display = 'none';
+  document.getElementById('lpForm').style.display = '';
+  document.getElementById('lpError').style.display = 'none';
+}
+
+function hideForm() {
+  document.getElementById('lpForm').style.display = 'none';
+  document.getElementById('lpTable').style.display = '';
+  document.getElementById('addLpBtn').style.display = '';
+}
+
+function clearForm() {
+  document.getElementById('lpName').value = '';
+  document.getElementById('lpDesc').value = '';
+  document.getElementById('lpAccessLog').checked = true;
+  setSelectVal('lpFormat', 'ApacheCombined');
+}
+
+function setSelectVal(id, val) {
+  var el = document.getElementById(id);
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === val) { el.selectedIndex = i; return; }
+  }
+}
+
+async function loadProfiles() {
+  try {
+    var r = await fetch('/api/log-profiles', {headers: authHeaders()});
+    var d = await r.json();
+    _lpData = {};
+    var rows = '';
+    (d.profiles || []).forEach(function(p) {
+      _lpData[p.name] = p;
+      var accessBadge = p.access_log !== false
+        ? '<span class="badge badge-green">on</span>'
+        : '<span class="badge badge-gray">off</span>';
+      rows += '<tr>' +
+        '<td><strong>' + esc(p.name) + '</strong></td>' +
+        '<td style="color:var(--muted)">' + esc(p.description || '') + '</td>' +
+        '<td>' + esc(FORMAT_LABELS[p.format] || p.format) + '</td>' +
+        '<td>' + accessBadge + '</td>' +
+        '<td>' +
+          '<button class="btn btn-secondary btn-sm" onclick="editProfile(\'' + esc(p.name) + '\')">Edit</button> ' +
+          '<button class="btn btn-danger btn-sm" onclick="deleteProfile(\'' + esc(p.name) + '\')">Delete</button>' +
+        '</td></tr>';
+    });
+    document.getElementById('lpBody').innerHTML = rows ||
+      '<tr><td colspan="5" class="empty-state">No logging profiles configured</td></tr>';
+  } catch(e) {
+    document.getElementById('lpBody').innerHTML = '<tr><td colspan="5">Error loading profiles</td></tr>';
+  }
+}
+
+function editProfile(name) { showEditForm(_lpData[name]); }
+
+async function submitProfile() {
+  var errEl  = document.getElementById('lpError');
+  var isEdit = !!document.getElementById('lpOrigName').value;
+  var name   = isEdit ? document.getElementById('lpOrigName').value
+                      : document.getElementById('lpName').value.trim();
+  if (!name) { errEl.textContent = 'Name is required.'; errEl.style.display = ''; return; }
+
+  var body = {
+    name:       name,
+    description: document.getElementById('lpDesc').value.trim(),
+    format:      document.getElementById('lpFormat').value,
+    access_log:  document.getElementById('lpAccessLog').checked,
+  };
+
+  var url    = isEdit ? '/api/log-profiles/' + encodeURIComponent(name) : '/api/log-profiles';
+  var method = isEdit ? 'PUT' : 'POST';
+  errEl.style.display = 'none';
+  try {
+    var r = await fetch(url, {method: method, headers: authHeaders(), body: JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Save failed'; errEl.style.display = ''; return; }
+    hideForm();
+    loadProfiles();
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+async function deleteProfile(name) {
+  if (!confirm('Delete logging profile "' + name + '"?')) return;
+  try {
+    var r = await fetch('/api/log-profiles/' + encodeURIComponent(name), {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Delete failed'); return; }
+    loadProfiles();
+  } catch(e) { alert('Request failed'); }
+}
+
+initPage('log-profiles');
+loadProfiles();
+</script>
+</body>
+</html>

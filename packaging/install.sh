@@ -10,6 +10,7 @@ RUN_DIR="${BASE_DIR}/run"
 LOG_DIR="${BASE_DIR}/var/log"
 LIB_DIR="${BASE_DIR}/var/lib"
 SPOOL_DIR="${BASE_DIR}/var/spool"
+GEOIP_DIR="${BASE_DIR}/lib/geoip"
 SYSTEMD_DIR="/etc/systemd/system"
 SW_USER="serverwall"
 SW_GROUP="serverwall"
@@ -50,6 +51,8 @@ install -d -m 755 -o "$SW_USER" -g "$SW_GROUP" "$RUN_DIR"
 install -d -m 755 -o "$SW_USER" -g "$SW_GROUP" "$LOG_DIR"
 install -d -m 755 -o "$SW_USER" -g "$SW_GROUP" "$LIB_DIR"
 install -d -m 755 -o "$SW_USER" -g "$SW_GROUP" "$SPOOL_DIR"
+install -d -m 755 -o root       -g "$SW_GROUP" "${BASE_DIR}/lib"
+install -d -m 755 -o root       -g "$SW_GROUP" "$GEOIP_DIR"
 echo "[+] Created runtime directories under ${BASE_DIR}"
 
 # ─── Binaries ─────────────────────────────────────────────────────────────────
@@ -57,6 +60,15 @@ install -m 755 -o root -g "$SW_GROUP" "${SCRIPT_DIR}/bin/serverwall"        "${B
 install -m 755 -o root -g "$SW_GROUP" "${SCRIPT_DIR}/bin/serverwall-webui"  "${BIN_DIR}/serverwall-webui"
 install -m 755 -o root -g "$SW_GROUP" "${SCRIPT_DIR}/bin/serverwallctl"     "${BIN_DIR}/serverwallctl"
 echo "[+] Installed binaries to ${BIN_DIR}"
+
+# ─── GeoIP database ───────────────────────────────────────────────────────────
+if [[ -f "${SCRIPT_DIR}/geoip/dbip-country-lite.mmdb" ]]; then
+    install -m 644 -o root -g "$SW_GROUP" \
+        "${SCRIPT_DIR}/geoip/dbip-country-lite.mmdb" \
+        "${GEOIP_DIR}/dbip-country-lite.mmdb"
+    echo "[+] Installed DB-IP country database to ${GEOIP_DIR}"
+    echo "    Attribution: DB-IP.com (CC BY 4.0) — see THIRD_PARTY_NOTICES"
+fi
 
 # ─── Systemd services ─────────────────────────────────────────────────────────
 install -m 644 "${SCRIPT_DIR}/systemd/serverwall.service"       "${SYSTEMD_DIR}/serverwall.service"

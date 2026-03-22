@@ -39,3 +39,4 @@ pin-project-lite = { workspace = true }
 argon2 = { workspace = true }
 openssl = { workspace = true }
 if-addrs = { workspace = true }
+regex = { workspace = true }

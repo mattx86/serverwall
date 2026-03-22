@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 
 use super::tls::OutboundTls;
@@ -46,7 +46,7 @@ impl SmtpSender {
             Ok(response) => DeliveryResult::Success(response),
             Err(e) => {
                 let msg = e.to_string();
-                if msg.contains("5") && msg.len() > 2 && msg.as_bytes().first() == Some(&b'5') {
+                if msg.starts_with('5') && msg.len() > 2 {
                     DeliveryResult::PermFail(msg)
                 } else {
                     DeliveryResult::TempFail(msg)
@@ -67,12 +67,12 @@ impl SmtpSender {
             .await
             .with_context(|| format!("failed to connect to {addr}"))?;
 
-        // We need to handle both plain and TLS streams uniformly.
-        // We will use a trait-object approach via Box<dyn AsyncRead + AsyncWrite + Unpin + Send>.
-        let (reader, mut writer) = tokio::io::split(stream);
-        let mut reader = BufReader::new(reader);
+        // Use owned split so we can reunite the halves for STARTTLS upgrade.
+        let (read_half, write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+        let mut writer = write_half;
 
-        // Read banner
+        // Read banner.
         let banner = read_response(&mut reader).await?;
         ensure_positive(&banner)?;
 
@@ -81,7 +81,7 @@ impl SmtpSender {
         let ehlo_resp = read_response(&mut reader).await?;
         ensure_positive(&ehlo_resp)?;
 
-        // Check for STARTTLS support and attempt upgrade
+        // Attempt STARTTLS upgrade if offered and our TLS config is enabled.
         let supports_starttls = ehlo_resp.to_uppercase().contains("STARTTLS");
         if supports_starttls {
             if let Some(tls) = &self.tls {
@@ -89,61 +89,107 @@ impl SmtpSender {
                     write_cmd(&mut writer, "STARTTLS").await?;
                     let tls_resp = read_response(&mut reader).await?;
                     if tls_resp.starts_with('2') {
-                        // Reassemble the stream for TLS upgrade
-                        // Due to split ownership, we need to reconnect for TLS.
-                        // In a production system we'd use a single stream;
-                        // here we log and continue in plaintext for simplicity.
-                        tracing::debug!(mx = %mx_host, "STARTTLS offered but upgrade requires unsplit stream; continuing plaintext");
+                        // Reunite the owned halves back into a TcpStream for the TLS upgrade.
+                        let owned_read = reader.into_inner();
+                        match owned_read.reunite(writer) {
+                            Ok(tcp_stream) => {
+                                match tls.upgrade(tcp_stream, mx_host).await {
+                                    Ok(tls_stream) => {
+                                        tracing::debug!(mx = %mx_host, "STARTTLS upgrade succeeded");
+                                        let (r, w) = tokio::io::split(tls_stream);
+                                        let mut tls_reader = BufReader::new(r);
+                                        let mut tls_writer = w;
+                                        // RFC 3207 §4.2 requires a fresh EHLO after STARTTLS.
+                                        write_cmd(&mut tls_writer, &format!("EHLO {}", self.hostname)).await?;
+                                        let _ = read_response(&mut tls_reader).await?;
+                                        return smtp_conversation(
+                                            &mut tls_reader,
+                                            &mut tls_writer,
+                                            mail_from,
+                                            rcpt_to,
+                                            message,
+                                        )
+                                        .await;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(mx = %mx_host, error = %e, "STARTTLS handshake failed");
+                                        anyhow::bail!("STARTTLS handshake failed: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(mx = %mx_host, error = %e, "failed to reunite TCP halves for STARTTLS");
+                                anyhow::bail!("STARTTLS reunite failed: {}", e);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // MAIL FROM
-        write_cmd(&mut writer, &format!("MAIL FROM:<{mail_from}>")).await?;
-        let from_resp = read_response(&mut reader).await?;
-        ensure_positive(&from_resp)?;
-
-        // RCPT TO
-        for rcpt in rcpt_to {
-            write_cmd(&mut writer, &format!("RCPT TO:<{rcpt}>")).await?;
-            let rcpt_resp = read_response(&mut reader).await?;
-            ensure_positive(&rcpt_resp)?;
-        }
-
-        // DATA
-        write_cmd(&mut writer, "DATA").await?;
-        let data_resp = read_response(&mut reader).await?;
-        if !data_resp.starts_with('3') {
-            anyhow::bail!("{data_resp}");
-        }
-
-        // Send message body, ensuring dot-stuffing
-        for line in message.split(|&b| b == b'\n') {
-            let line = if line.ends_with(b"\r") {
-                &line[..line.len() - 1]
-            } else {
-                line
-            };
-            if line.starts_with(b".") {
-                writer.write_all(b".").await?;
-            }
-            writer.write_all(line).await?;
-            writer.write_all(b"\r\n").await?;
-        }
-
-        // Terminating dot
-        writer.write_all(b".\r\n").await?;
-        writer.flush().await?;
-
-        let final_resp = read_response(&mut reader).await?;
-        ensure_positive(&final_resp)?;
-
-        // QUIT (best-effort)
-        let _ = write_cmd(&mut writer, "QUIT").await;
-
-        Ok(final_resp)
+        // Plain-text SMTP conversation.
+        smtp_conversation(&mut reader, &mut writer, mail_from, rcpt_to, message).await
     }
+}
+
+/// Perform the SMTP conversation (MAIL FROM → RCPT TO → DATA → body → QUIT).
+///
+/// Generic over reader/writer so it works on both plain TCP and TLS streams.
+async fn smtp_conversation<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+    mail_from: &str,
+    rcpt_to: &[String],
+    message: &[u8],
+) -> Result<String>
+where
+    R: AsyncBufRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    // MAIL FROM
+    write_cmd(writer, &format!("MAIL FROM:<{mail_from}>")).await?;
+    let from_resp = read_response(reader).await?;
+    ensure_positive(&from_resp)?;
+
+    // RCPT TO
+    for rcpt in rcpt_to {
+        write_cmd(writer, &format!("RCPT TO:<{rcpt}>")).await?;
+        let rcpt_resp = read_response(reader).await?;
+        ensure_positive(&rcpt_resp)?;
+    }
+
+    // DATA
+    write_cmd(writer, "DATA").await?;
+    let data_resp = read_response(reader).await?;
+    if !data_resp.starts_with('3') {
+        anyhow::bail!("{data_resp}");
+    }
+
+    // Send message body with dot-stuffing.
+    for line in message.split(|&b| b == b'\n') {
+        let line = if line.ends_with(b"\r") {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        if line.starts_with(b".") {
+            writer.write_all(b".").await?;
+        }
+        writer.write_all(line).await?;
+        writer.write_all(b"\r\n").await?;
+    }
+
+    // Terminating dot.
+    writer.write_all(b".\r\n").await?;
+    writer.flush().await?;
+
+    let final_resp = read_response(reader).await?;
+    ensure_positive(&final_resp)?;
+
+    // QUIT (best-effort).
+    let _ = write_cmd(writer, "QUIT").await;
+
+    Ok(final_resp)
 }
 
 /// Read a full SMTP response (may be multi-line).

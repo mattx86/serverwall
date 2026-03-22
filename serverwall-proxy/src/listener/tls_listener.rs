@@ -6,6 +6,8 @@ use tokio::net::TcpStream;
 use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
+use serverwall_core::tls::ja3;
+
 use super::tcp_listener::TcpListenerTask;
 
 /// Accepts TLS connections on one or more bound addresses, performing the TLS
@@ -43,6 +45,10 @@ impl TlsListenerTask {
     ///   - the peer `SocketAddr`
     ///   - the local `SocketAddr`
     ///   - the SNI hostname extracted from the handshake (if present)
+    ///   - the JA3 fingerprint computed from the ClientHello (if parseable)
+    ///
+    /// JA3 is computed by peeking at the raw TCP bytes *before* the handshake
+    /// so it captures what the client advertised, not what was negotiated.
     ///
     /// Connections that fail the TLS handshake are logged and dropped.
     pub async fn run<H, Fut>(
@@ -51,7 +57,7 @@ impl TlsListenerTask {
         shutdown_rx: tokio::sync::watch::Receiver<bool>,
     ) -> anyhow::Result<()>
     where
-        H: Fn(TlsStream<TcpStream>, SocketAddr, SocketAddr, Option<String>) -> Fut
+        H: Fn(TlsStream<TcpStream>, SocketAddr, SocketAddr, Option<String>, Option<String>) -> Fut
             + Send
             + Sync
             + 'static,
@@ -67,6 +73,15 @@ impl TlsListenerTask {
                     let handler = handler.clone();
 
                     async move {
+                        // Peek at the raw ClientHello bytes to compute JA3 *before*
+                        // the handshake consumes them.  peek() does not advance the
+                        // read position so rustls receives the full record intact.
+                        let mut peek_buf = [0u8; 4096];
+                        let ja3_hash = match tcp_stream.peek(&mut peek_buf).await {
+                            Ok(n) if n > 0 => ja3::compute_from_bytes(&peek_buf[..n]),
+                            _ => None,
+                        };
+
                         // Perform TLS handshake
                         let tls_stream = match acceptor.accept(tcp_stream).await {
                             Ok(stream) => stream,
@@ -87,7 +102,7 @@ impl TlsListenerTask {
                             .server_name()
                             .map(|s| s.to_string());
 
-                        handler(tls_stream, peer_addr, local_addr, sni).await;
+                        handler(tls_stream, peer_addr, local_addr, sni, ja3_hash).await;
                     }
                 },
                 shutdown_rx,

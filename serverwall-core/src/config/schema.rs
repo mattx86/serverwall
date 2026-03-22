@@ -408,7 +408,7 @@ pub struct BotDetectionConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub ja3_fingerprint_blocklist: Vec<String>,
+    pub ja3_fingerprint_block_list: Vec<String>,
     #[serde(default)]
     pub challenge_suspicious: bool,
     #[serde(default)]
@@ -439,9 +439,9 @@ pub struct SecurityHeadersConfig {
     pub add_referrer_policy: Option<String>,
     #[serde(default)]
     pub add_content_security_policy: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub remove_server_header: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub remove_x_powered_by: bool,
 }
 
@@ -461,9 +461,9 @@ pub struct AntispamConfig {
     pub max_check_duration: String,
 
     #[serde(default)]
-    pub whitelist: AntispamListConfig,
+    pub allow: AntispamListConfig,
     #[serde(default)]
-    pub blocklist: AntispamListConfig,
+    pub block: AntispamListConfig,
 
     #[serde(default)]
     pub dnsbl: DnsblConfig,
@@ -471,6 +471,8 @@ pub struct AntispamConfig {
     pub spf: SpfConfig,
     #[serde(default)]
     pub rdns: CheckWeightConfig,
+    #[serde(default)]
+    pub residential_spf: ResidentialSenderConfig,
     #[serde(default)]
     pub helo: CheckWeightConfig,
     #[serde(default)]
@@ -523,6 +525,45 @@ pub struct CheckWeightConfig {
     pub enabled: bool,
     #[serde(default = "default_check_weight")]
     pub weight: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResidentialSenderConfig {
+    /// Enable the residential sender SPF enforcement check.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// When true, matching senders are rejected (550). When false, a score penalty is applied instead (useful for testing).
+    #[serde(default = "default_true")]
+    pub reject: bool,
+    /// Score penalty applied when `reject = false`.
+    #[serde(default = "default_residential_weight")]
+    pub weight: f64,
+    /// Query the Spamhaus PBL (or a custom zone) to detect residential IP ranges by ISP policy (IPv4 only).
+    #[serde(default = "default_true")]
+    pub check_pbl: bool,
+    /// DNSBL zone for residential/policy-blocked IP ranges.
+    #[serde(default = "default_pbl_zone")]
+    pub pbl_zone: String,
+    /// Treat SPF SoftFail as a reject trigger (in addition to Fail and None).
+    #[serde(default = "default_true")]
+    pub softfail_triggers: bool,
+    /// Treat SPF Neutral as a reject trigger.
+    #[serde(default)]
+    pub neutral_triggers: bool,
+}
+
+impl Default for ResidentialSenderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            reject: true,
+            weight: default_residential_weight(),
+            check_pbl: true,
+            pbl_zone: default_pbl_zone(),
+            softfail_triggers: true,
+            neutral_triggers: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -701,6 +742,10 @@ pub struct RelayConfig {
     #[serde(default)]
     pub dkim: RelayDkimConfig,
     #[serde(default)]
+    pub dmarc_publish: RelayDmarcPublishConfig,
+    #[serde(default)]
+    pub spf_publish: RelaySpfPublishConfig,
+    #[serde(default)]
     pub outbound_policy: OutboundPolicyConfig,
     #[serde(default)]
     pub bounce: BounceConfig,
@@ -749,6 +794,63 @@ pub struct DkimDomainConfig {
     pub key_file: PathBuf,
     #[serde(default = "default_dkim_algorithm")]
     pub algorithm: String,
+}
+
+// ---------------------------------------------------------------------------
+// DMARC publish (DNS record management for owned domains)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RelayDmarcPublishConfig {
+    #[serde(default)]
+    pub domains: Vec<DmarcPolicyDomain>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DmarcPolicyDomain {
+    pub domain: String,
+    #[serde(default = "default_dmarc_publish_policy")]
+    pub policy: String, // "none" | "quarantine" | "reject"
+    #[serde(default)]
+    pub subdomain_policy: Option<String>,
+    #[serde(default = "default_hundred")]
+    pub pct: u8,
+    #[serde(default)]
+    pub rua: Vec<String>,
+    #[serde(default)]
+    pub ruf: Vec<String>,
+    #[serde(default = "default_relaxed_alignment")]
+    pub adkim: String, // "r" (relaxed) | "s" (strict)
+    #[serde(default = "default_relaxed_alignment")]
+    pub aspf: String,
+}
+
+// ---------------------------------------------------------------------------
+// SPF publish (DNS record management for owned domains)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RelaySpfPublishConfig {
+    #[serde(default)]
+    pub domains: Vec<SpfDomainConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpfDomainConfig {
+    pub domain: String,
+    #[serde(default)]
+    pub mechanisms: Vec<SpfMechanism>,
+    #[serde(default = "default_spf_all")]
+    pub all: String, // "-all" | "~all" | "+all" | "?all"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpfMechanism {
+    #[serde(default = "default_spf_qualifier")]
+    pub qualifier: String, // "+" | "-" | "~" | "?"
+    pub mechanism: String, // "include", "ip4", "ip6", "a", "mx", "ptr", "exists"
+    #[serde(default)]
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -879,6 +981,8 @@ fn default_check_duration() -> String { "10s".into() }
 fn default_check_weight() -> f64 { 3.0 }
 fn default_dnsbl_weight() -> f64 { 8.0 }
 fn default_dnsbl_timeout() -> String { "5s".into() }
+fn default_residential_weight() -> f64 { 10.0 }
+fn default_pbl_zone() -> String { "pbl.spamhaus.org".into() }
 fn default_one_f64() -> f64 { 1.0 }
 fn default_half_f64() -> f64 { 0.5 }
 fn default_point_one() -> f64 { 0.1 }
@@ -905,6 +1009,11 @@ fn default_max_message_size() -> usize { 26_214_400 }
 fn default_max_recipients() -> usize { 100 }
 fn default_domain_rate() -> u64 { 500 }
 fn default_dkim_algorithm() -> String { "rsa-sha256".into() }
+fn default_dmarc_publish_policy() -> String { "none".into() }
+fn default_relaxed_alignment() -> String { "r".into() }
+fn default_hundred() -> u8 { 100 }
+fn default_spf_all() -> String { "-all".into() }
+fn default_spf_qualifier() -> String { "+".into() }
 fn default_max_age() -> String { "5d".into() }
 fn default_max_attempts() -> u32 { 25 }
 

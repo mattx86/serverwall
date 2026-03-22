@@ -136,6 +136,19 @@ weight = 6.0
 enabled = true
 weight = 4.0
 
+# Residential sender enforcement: rejects email from residential/consumer ISP IP
+# addresses that lack a valid SPF record. Detection uses PTR hostname patterns
+# (dynamic, dsl, cable, etc.), missing PTR records, and the Spamhaus PBL.
+# Senders with SPF Pass are allowed through even if the IP is residential.
+[antispam.residential_spf]
+enabled = true
+reject = true              # false = score only (useful for testing before enabling)
+weight = 10.0              # score penalty when reject = false
+check_pbl = true           # query pbl.spamhaus.org for ISP-published residential ranges
+pbl_zone = "pbl.spamhaus.org"
+softfail_triggers = true   # SPF SoftFail counts as a rejection trigger
+neutral_triggers = false   # SPF Neutral does not trigger rejection by default
+
 [antispam.helo]
 enabled = true
 weight = 3.0

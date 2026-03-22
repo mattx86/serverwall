@@ -43,3 +43,4 @@ clap = { workspace = true }
 if-addrs = { workspace = true }
 openssl = { workspace = true }
 sha2 = { workspace = true }
+futures = { workspace = true }

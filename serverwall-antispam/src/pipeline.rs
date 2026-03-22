@@ -23,6 +23,8 @@ pub struct EnvelopeContext {
     pub command_count: u32,
     /// Whether pipelining abuse was detected.
     pub pipelining_detected: bool,
+    /// JA3 TLS fingerprint, if the connection was TLS and the ClientHello was parseable.
+    pub ja3_fingerprint: Option<String>,
 }
 
 impl EnvelopeContext {
@@ -39,6 +41,7 @@ impl EnvelopeContext {
             banner_sent_time: now,
             command_count: 0,
             pipelining_detected: false,
+            ja3_fingerprint: None,
         }
     }
 }
@@ -54,7 +57,7 @@ pub struct MessageContext {
 pub enum PipelineDecision {
     /// Continue to the next check.
     Continue,
-    /// Accept the message immediately (whitelist hit).
+    /// Accept the message immediately (allow list hit).
     Accept,
     /// Reject the message with an SMTP reply code.
     Reject(u16, String),

@@ -126,6 +126,44 @@ pub async fn create(
     }
 }
 
+/// PUT /api/backends/:pool - replace a backend pool's configuration
+pub async fn update(
+    State(state): State<AppState>,
+    Path(pool_name): Path<String>,
+    Json(pool): Json<BackendPoolConfig>,
+) -> (StatusCode, Json<Value>) {
+    {
+        let mut test = (**state.config.load()).clone();
+        match test.backend_pool.iter().position(|p| p.name == pool_name) {
+            Some(idx) => test.backend_pool[idx] = pool.clone(),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({"error": "backend pool not found"})),
+                )
+            }
+        }
+        if let Err(e) = serverwall_core::config::validate_config(&test) {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": e.to_string()})),
+            );
+        }
+    }
+
+    match editor::update_backend_pool(&state.config_path, &pool_name, pool) {
+        Ok(()) => {
+            state.reload_config();
+            let _ = send_reload_signal(&PathBuf::from(DEFAULT_PID_FILE));
+            (StatusCode::OK, Json(json!({"updated": true})))
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": e.to_string()})),
+        ),
+    }
+}
+
 /// DELETE /api/backends/:pool - remove a backend pool
 pub async fn delete(
     State(state): State<AppState>,

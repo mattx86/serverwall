@@ -1,5 +1,5 @@
-pub mod blocklist;
-pub mod whitelist;
+pub mod allow_list;
+pub mod block_list;
 
-pub use blocklist::Blocklist;
-pub use whitelist::Whitelist;
+pub use allow_list::AllowList;
+pub use block_list::BlockList;

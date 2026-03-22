@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Antispam</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.check-row{display:flex;align-items:center;gap:.6rem;padding:.38rem 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.check-row:last-child{border-bottom:none}
+.check-name{flex:1;font-size:.88rem}
+.check-weight{font-size:.8rem;color:var(--muted);min-width:4rem;text-align:right}
+.section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:1rem 0 .4rem}
+.list-table{width:100%;border-collapse:collapse;font-size:.85rem}
+.list-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
+.list-table td:last-child{width:60px;text-align:right}
+.add-row{display:flex;gap:.4rem;margin-top:.5rem}
+.add-row input{flex:1}
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1rem}
+.tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
+.tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+.dnsbl-table{width:100%;border-collapse:collapse;font-size:.85rem}
+.dnsbl-table th{text-align:left;padding:.3rem .5rem;font-size:.75rem;color:var(--muted);font-weight:500}
+.dnsbl-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">Antispam</h2>
+    </div>
+
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('lists')">Lists</div>
+      <div class="tab" onclick="switchTab('dnsbl')">DNSBL Zones</div>
+      <div class="tab" onclick="switchTab('config')">Check Config</div>
+    </div>
+
+    <!-- Lists tab -->
+    <div id="tab-lists" class="tab-panel active">
+      <div class="form-panel">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+
+          <!-- Allow List -->
+          <div>
+            <div class="section-label" style="margin-top:0;color:var(--success,#4ade80)">Allow List (always pass)</div>
+
+            <div class="section-label">IPs</div>
+            <table class="list-table"><tbody id="wlIps"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="wlIpInput" placeholder="1.2.3.4">
+              <button class="btn btn-sm btn-primary" onclick="addEntry('allow','ips','wlIpInput')">Add</button>
+            </div>
+
+            <div class="section-label">Senders</div>
+            <table class="list-table"><tbody id="wlSenders"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="wlSenderInput" placeholder="trusted@example.com">
+              <button class="btn btn-sm btn-primary" onclick="addEntry('allow','senders','wlSenderInput')">Add</button>
+            </div>
+
+            <div class="section-label">Domains</div>
+            <table class="list-table"><tbody id="wlDomains"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="wlDomainInput" placeholder="example.com">
+              <button class="btn btn-sm btn-primary" onclick="addEntry('allow','domains','wlDomainInput')">Add</button>
+            </div>
+          </div>
+
+          <!-- Block List -->
+          <div>
+            <div class="section-label" style="margin-top:0;color:var(--danger,#f87171)">Block List (always reject)</div>
+
+            <div class="section-label">IPs</div>
+            <table class="list-table"><tbody id="blIps"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="blIpInput" placeholder="1.2.3.4">
+              <button class="btn btn-sm btn-danger" onclick="addEntry('block','ips','blIpInput')">Add</button>
+            </div>
+
+            <div class="section-label">Senders</div>
+            <table class="list-table"><tbody id="blSenders"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="blSenderInput" placeholder="spammer@evil.com">
+              <button class="btn btn-sm btn-danger" onclick="addEntry('block','senders','blSenderInput')">Add</button>
+            </div>
+
+            <div class="section-label">Domains</div>
+            <table class="list-table"><tbody id="blDomains"></tbody></table>
+            <div class="add-row">
+              <input type="text" id="blDomainInput" placeholder="spam.com">
+              <button class="btn btn-sm btn-danger" onclick="addEntry('block','domains','blDomainInput')">Add</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- DNSBL tab -->
+    <div id="tab-dnsbl" class="tab-panel">
+      <div class="form-panel">
+        <table class="dnsbl-table">
+          <thead><tr><th>Zone</th><th>Weight multiplier</th><th>Reject on hit</th><th></th></tr></thead>
+          <tbody id="dnsblRows"></tbody>
+        </table>
+        <div style="margin-top:1rem;display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+          <input type="text" id="dnsblZone" placeholder="zen.spamhaus.org" style="flex:2;min-width:180px">
+          <input type="number" id="dnsblWeight" value="1.0" step="0.1" min="0.1" style="width:6rem" placeholder="weight">
+          <label style="display:flex;align-items:center;gap:.3rem;font-size:.85rem">
+            <input type="checkbox" id="dnsblReject"> reject on hit
+          </label>
+          <button class="btn btn-primary" onclick="addDnsblZone()">Add Zone</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Config tab -->
+    <div id="tab-config" class="tab-panel">
+      <div class="form-panel">
+        <div class="section-label" style="margin-top:0">Check Configuration</div>
+        <div id="checkList"></div>
+        <div style="margin-top:1rem">
+          <button class="btn btn-secondary" onclick="reloadConfig()">Reload Config</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+var FIELD_MAP = {
+  'allow': { 'ips': 'ip', 'senders': 'sender', 'domains': 'domain' },
+  'block': { 'ips': 'ip', 'senders': 'sender', 'domains': 'domain' },
+};
+var TABLE_ID = {
+  allow: { ips: 'wlIps', senders: 'wlSenders', domains: 'wlDomains' },
+  block: { ips: 'blIps', senders: 'blSenders', domains: 'blDomains' },
+};
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(function(t,i){ t.classList.remove('active'); });
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  var tabs = ['lists','dnsbl','config'];
+  document.querySelectorAll('.tab')[tabs.indexOf(name)].classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+}
+
+function renderList(tbodyId, items, listType, subType) {
+  var tbody = document.getElementById(tbodyId);
+  if (!items || items.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="2" style="color:var(--muted);font-style:italic">None</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(function(v) {
+    return '<tr><td>' + esc(v) + '</td><td>' +
+      '<button class="btn btn-sm btn-danger" onclick="removeEntry(\'' + listType + '\',\'' + subType + '\',\'' + esc(v) + '\')">✕</button>' +
+      '</td></tr>';
+  }).join('');
+}
+
+function renderDnsbl(zones) {
+  var tbody = document.getElementById('dnsblRows');
+  if (!zones || zones.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);font-style:italic">No DNSBL zones configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = zones.map(function(z) {
+    return '<tr>' +
+      '<td><code>' + esc(z.zone) + '</code></td>' +
+      '<td>' + esc(z.weight_multiplier) + '</td>' +
+      '<td>' + (z.reject_on_hit ? '<span class="badge badge-red">yes</span>' : 'no') + '</td>' +
+      '<td style="text-align:right"><button class="btn btn-sm btn-danger" onclick="removeDnsblZone(\'' + esc(z.zone) + '\')">Delete</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+async function loadAll() {
+  try {
+    var r = await fetch('/api/antispam/lists', {headers: authHeaders()});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var d = await r.json();
+
+    renderList('wlIps',     d.allow.ips,     'allow', 'ips');
+    renderList('wlSenders', d.allow.senders, 'allow', 'senders');
+    renderList('wlDomains', d.allow.domains, 'allow', 'domains');
+    renderList('blIps',     d.block.ips,     'block', 'ips');
+    renderList('blSenders', d.block.senders, 'block', 'senders');
+    renderList('blDomains', d.block.domains, 'block', 'domains');
+    renderDnsbl(d.dnsbl_zones);
+  } catch(e) {
+    document.getElementById('loadError').textContent = 'Failed to load: ' + e.message;
+    document.getElementById('loadError').style.display = '';
+  }
+}
+
+async function loadConfig() {
+  try {
+    var r = await fetch('/api/antispam/stats', {headers: authHeaders()});
+    var d = await r.json();
+    var checkNames = {
+      dnsbl: 'DNSBL (DNS Block Lists)', spf: 'SPF', dkim: 'DKIM Signature',
+      dmarc: 'DMARC Policy', rdns: 'Reverse DNS', helo: 'HELO/EHLO Validation',
+      content: 'Content Analysis', url_analysis: 'URL/SURBL Analysis',
+      attachment: 'Attachment Scanning', html: 'HTML Analysis',
+    };
+    var checks = d.checks || {};
+    var html = '';
+    Object.keys(checkNames).forEach(function(key) {
+      var c = checks[key] || {};
+      var badge = c.enabled
+        ? '<span class="badge badge-green" style="font-size:.7rem">on</span>'
+        : '<span class="badge badge-gray" style="font-size:.7rem">off</span>';
+      html += '<div class="check-row">' + badge +
+        '<span class="check-name">' + esc(checkNames[key]) + '</span>' +
+        '<span class="check-weight">' + (c.weight != null ? 'weight: ' + c.weight : '') + '</span>' +
+        '</div>';
+    });
+    document.getElementById('checkList').innerHTML = html;
+  } catch(e) {}
+}
+
+async function addEntry(listType, subType, inputId) {
+  var val = document.getElementById(inputId).value.trim();
+  if (!val) return;
+  var fieldName = FIELD_MAP[listType][subType];
+  var body = {};
+  body[fieldName] = val;
+  try {
+    var r = await fetch('/api/antispam/' + listType + '/' + subType, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    document.getElementById(inputId).value = '';
+    loadAll();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function removeEntry(listType, subType, value) {
+  try {
+    var r = await fetch('/api/antispam/' + listType + '/' + subType + '/' + encodeURIComponent(value), {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    loadAll();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function addDnsblZone() {
+  var zone = document.getElementById('dnsblZone').value.trim();
+  if (!zone) { alert('Zone is required'); return; }
+  var body = {
+    zone: zone,
+    weight_multiplier: parseFloat(document.getElementById('dnsblWeight').value) || 1.0,
+    reject_on_hit: document.getElementById('dnsblReject').checked,
+  };
+  try {
+    var r = await fetch('/api/antispam/dnsbl', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    document.getElementById('dnsblZone').value = '';
+    document.getElementById('dnsblWeight').value = '1.0';
+    document.getElementById('dnsblReject').checked = false;
+    loadAll();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function removeDnsblZone(zone) {
+  if (!confirm('Remove DNSBL zone "' + zone + '"?')) return;
+  try {
+    var r = await fetch('/api/antispam/dnsbl/' + encodeURIComponent(zone), {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    loadAll();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function reloadConfig() {
+  try {
+    var r = await fetch('/api/reload', {method: 'POST', headers: authHeaders()});
+    var d = await r.json();
+    if (!r.ok) { alert(d.error || 'Reload failed'); return; }
+    alert('Configuration reloaded.');
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+initPage('antispam');
+loadAll();
+loadConfig();
+</script>
+</body>
+</html>

@@ -12,9 +12,11 @@ use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use serverwall_core::config::schema::{BalanceMethod, FrontendConfig, SecurityHeadersConfig};
+use serverwall_core::acl::{AclDecision, PathAcl};
+use serverwall_core::config::schema::{BalanceMethod, BotDetectionConfig, CookieSecurityConfig, FrontendConfig, ProtocolType, SecurityHeadersConfig};
 use serverwall_core::types::Backend;
 use serverwall_waf::engine::WafEngine;
+use serverwall_waf::rate_limit::{RateLimiter, RateLimitKey};
 use serverwall_waf::request::HttpRequestContext;
 
 use crate::pipeline::RequestPipeline;
@@ -25,6 +27,12 @@ pub struct HttpProxy {
     frontend_config: Arc<FrontendConfig>,
     security_headers: Arc<SecurityHeadersConfig>,
     pipeline: Arc<RequestPipeline>,
+    path_acl: Option<Arc<PathAcl>>,
+    bot_detection: Arc<BotDetectionConfig>,
+    hsts_max_age: Option<u64>,
+    hsts_include_subdomains: bool,
+    rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>>,
+    cookie_security: Arc<CookieSecurityConfig>,
 }
 
 impl HttpProxy {
@@ -34,12 +42,24 @@ impl HttpProxy {
         security_headers: SecurityHeadersConfig,
         waf: Option<Arc<WafEngine>>,
         pipeline: Arc<RequestPipeline>,
+        path_acl: Option<Arc<PathAcl>>,
+        bot_detection: BotDetectionConfig,
+        hsts_max_age: Option<u64>,
+        hsts_include_subdomains: bool,
+        rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>>,
+        cookie_security: CookieSecurityConfig,
     ) -> Self {
         Self {
             waf,
             frontend_config: Arc::new(frontend_config),
             security_headers: Arc::new(security_headers),
             pipeline,
+            path_acl,
+            bot_detection: Arc::new(bot_detection),
+            hsts_max_age,
+            hsts_include_subdomains,
+            rate_limiters,
+            cookie_security: Arc::new(cookie_security),
         }
     }
 
@@ -48,6 +68,7 @@ impl HttpProxy {
         &self,
         stream: S,
         client_ip: IpAddr,
+        ja3_fingerprint: Option<String>,
     ) -> anyhow::Result<()>
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -57,16 +78,41 @@ impl HttpProxy {
         let frontend_config = self.frontend_config.clone();
         let security_headers = self.security_headers.clone();
         let pipeline = self.pipeline.clone();
+        let path_acl = self.path_acl.clone();
+        let bot_detection = self.bot_detection.clone();
+        let hsts_max_age = self.hsts_max_age;
+        let hsts_include_subdomains = self.hsts_include_subdomains;
+        let rate_limiters = self.rate_limiters.clone();
+        let cookie_security = self.cookie_security.clone();
 
         let service = service_fn(move |req: Request<Incoming>| {
             let waf = waf.clone();
             let frontend_config = frontend_config.clone();
             let security_headers = security_headers.clone();
             let pipeline = pipeline.clone();
+            let path_acl = path_acl.clone();
+            let bot_detection = bot_detection.clone();
+            let rate_limiters = rate_limiters.clone();
+            let cookie_security = cookie_security.clone();
+            let ja3 = ja3_fingerprint.clone();
 
             async move {
-                handle_request(req, client_ip, waf, frontend_config, security_headers, pipeline)
-                    .await
+                handle_request(
+                    req,
+                    client_ip,
+                    waf,
+                    frontend_config,
+                    security_headers,
+                    pipeline,
+                    path_acl,
+                    bot_detection,
+                    hsts_max_age,
+                    hsts_include_subdomains,
+                    rate_limiters,
+                    cookie_security,
+                    ja3,
+                )
+                .await
             }
         });
 
@@ -121,10 +167,18 @@ async fn handle_request(
     frontend_config: Arc<FrontendConfig>,
     security_headers: Arc<SecurityHeadersConfig>,
     pipeline: Arc<RequestPipeline>,
+    path_acl: Option<Arc<PathAcl>>,
+    bot_detection: Arc<BotDetectionConfig>,
+    hsts_max_age: Option<u64>,
+    hsts_include_subdomains: bool,
+    rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>>,
+    cookie_security: Arc<CookieSecurityConfig>,
+    ja3_fingerprint: Option<String>,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let version = req.version();
+    let is_tls = matches!(frontend_config.protocol, ProtocolType::Https);
 
     // Generate a request ID
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -146,6 +200,45 @@ async fn handle_request(
         }
     };
 
+    // Path ACL check (before WAF, after IP ACL which happens at the listener level).
+    if let Some(ref acl) = path_acl {
+        let path = uri.path();
+        if let Some(AclDecision::Deny) = acl.check(path) {
+            tracing::info!(client = %client_ip, path = %path, "request blocked by path ACL");
+            return Ok(error_response(StatusCode::FORBIDDEN, "Forbidden"));
+        }
+    }
+
+    // Bot detection: User-Agent and JA3 fingerprint checks.
+    if bot_detection.enabled {
+        let ua = header_map.get("user-agent").map(|s| s.as_str()).unwrap_or("");
+        if is_blocked_bot(ua, &bot_detection) {
+            tracing::info!(client = %client_ip, user_agent = %ua, "request blocked by bot detection");
+            return Ok(error_response(StatusCode::FORBIDDEN, "Forbidden"));
+        }
+        if let Some(ref ja3) = ja3_fingerprint {
+            if bot_detection.ja3_fingerprint_block_list.iter().any(|b| b == ja3) {
+                tracing::info!(client = %client_ip, ja3 = %ja3, "request blocked by JA3 fingerprint");
+                return Ok(error_response(StatusCode::FORBIDDEN, "Forbidden"));
+            }
+        }
+    }
+
+    // HTTP rate limiting
+    for rl in &rate_limiters {
+        let (limiter, key) = rl.as_ref();
+        let k = match key {
+            RateLimitKey::ClientIp => client_ip.to_string(),
+            RateLimitKey::Header(h) => header_map.get(h.to_lowercase().as_str())
+                .cloned()
+                .unwrap_or_default(),
+        };
+        if !k.is_empty() && !limiter.check_key(&k) {
+            tracing::info!(client = %client_ip, "request rate-limited");
+            return Ok(error_response(StatusCode::TOO_MANY_REQUESTS, "Too Many Requests"));
+        }
+    }
+
     // WAF inspection
     if let Some(ref waf_engine) = waf {
         if frontend_config.waf_enabled {
@@ -155,6 +248,7 @@ async fn handle_request(
                 header_map.clone(),
                 body_bytes.clone(),
                 client_ip,
+                ja3_fingerprint.clone(),
             );
 
             let verdict = waf_engine.inspect(&waf_ctx);
@@ -335,11 +429,24 @@ async fn handle_request(
             continue;
         }
 
-        // Strip server identification and tech-fingerprinting headers
-        if lower == "server" || lower == "x-powered-by" {
+        // Conditionally strip server identification headers
+        if lower == "server" && security_headers.remove_server_header {
+            continue;
+        }
+        if lower == "x-powered-by" && security_headers.remove_x_powered_by {
             continue;
         }
         if FINGERPRINT_HEADERS.contains(&lower.as_str()) {
+            continue;
+        }
+
+        // Apply cookie security policy to Set-Cookie headers from the backend.
+        if lower == "set-cookie" {
+            if let Ok(v) = value.to_str() {
+                if let Some(rewritten) = enforce_set_cookie(v, &cookie_security, is_tls) {
+                    response = response.header("Set-Cookie", rewritten);
+                }
+            }
             continue;
         }
 
@@ -365,16 +472,22 @@ async fn handle_request(
 
     // Inject sticky-session cookie so clients route back to the same backend.
     if sticky {
-        let cookie_val = format!(
+        let mut cookie_val = format!(
             "{}={}; Path=/; HttpOnly; SameSite=Lax",
             cookie_name, backend.tag
         );
+        if is_tls {
+            cookie_val.push_str("; Secure");
+        }
         response = response.header("Set-Cookie", cookie_val);
     }
 
-    // Add HSTS if configured (handled at the TLS/security config level)
-    // The hsts_max_age is in SecurityTlsConfig, not SecurityHeadersConfig,
-    // so we skip it here.
+    // HSTS (only meaningful for HTTPS frontends; callers pass None for plain HTTP)
+    if let Some(max_age) = hsts_max_age {
+        let mut hsts = format!("max-age={}", max_age);
+        if hsts_include_subdomains { hsts.push_str("; includeSubDomains"); }
+        response = response.header("Strict-Transport-Security", hsts);
+    }
 
     let final_response = match response.body(Full::new(resp_body)) {
         Ok(r) => r,
@@ -396,10 +509,92 @@ async fn handle_request(
         status = %final_response.status().as_u16(),
         request_id = %request_id,
         backend_tag = %backend.tag,
+        ja3 = ja3_fingerprint.as_deref().unwrap_or("-"),
         "HTTP request processed",
     );
 
     Ok(final_response)
+}
+
+/// Known bad bot User-Agent substrings (common scrapers/scanners/attackers).
+const KNOWN_BAD_BOT_SIGNATURES: &[&str] = &[
+    "masscan",
+    "nikto",
+    "sqlmap",
+    "nmap",
+    "zgrab",
+    "python-requests",
+    "go-http-client",
+    "curl/",
+    "wget/",
+    "libwww-perl",
+    "scrapy",
+    "semrushbot",
+    "ahrefsbot",
+    "mj12bot",
+    "dotbot",
+    "blexbot",
+    "majestic",
+    "petalbot",
+    "bytespider",
+    "claudebot",
+];
+
+/// Check whether a User-Agent matches a known-bad bot signature or the config block list.
+fn is_blocked_bot(user_agent: &str, config: &BotDetectionConfig) -> bool {
+    let ua_lower = user_agent.to_lowercase();
+
+    // Known-good bots are always allowed, even if they happen to match a signature.
+    for good in &config.known_good_bots {
+        if ua_lower.contains(&good.to_lowercase()) {
+            return false;
+        }
+    }
+
+    // Check built-in bad bot signatures.
+    for sig in KNOWN_BAD_BOT_SIGNATURES {
+        if ua_lower.contains(sig) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Rewrite a single `Set-Cookie` header value to enforce the configured cookie security
+/// policy. Returns `None` to drop cookies whose name=value exceeds `max_cookie_size`.
+fn enforce_set_cookie(value: &str, cfg: &CookieSecurityConfig, is_tls: bool) -> Option<String> {
+    let parts: Vec<&str> = value.split(';').collect();
+    if parts.is_empty() {
+        return Some(value.to_string());
+    }
+    let name_value = parts[0].trim();
+
+    // Drop cookies whose name=value portion exceeds the configured limit.
+    if cfg.max_cookie_size > 0 && name_value.len() > cfg.max_cookie_size {
+        return None;
+    }
+
+    let mut attrs: Vec<String> = parts[1..].iter().map(|s| s.trim().to_string()).collect();
+    let lower: Vec<String> = attrs.iter().map(|s| s.to_lowercase()).collect();
+
+    if cfg.enforce_secure_flag && is_tls && !lower.iter().any(|a| a == "secure") {
+        attrs.push("Secure".to_string());
+    }
+    if cfg.enforce_httponly_flag && !lower.iter().any(|a| a == "httponly") {
+        attrs.push("HttpOnly".to_string());
+    }
+    if let Some(ref samesite) = cfg.enforce_samesite {
+        attrs.retain(|a| !a.to_lowercase().starts_with("samesite"));
+        attrs.push(format!("SameSite={}", samesite));
+    }
+
+    let mut result = name_value.to_string();
+    for attr in &attrs {
+        result.push_str("; ");
+        result.push_str(attr);
+    }
+    Some(result)
 }
 
 /// Parse the value of a named cookie from the `Cookie` header map entry.

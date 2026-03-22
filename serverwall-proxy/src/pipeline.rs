@@ -5,7 +5,7 @@ use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio_rustls::client::TlsStream;
 
-use serverwall_core::acl::{AclDecision, AccessControlEngine};
+use serverwall_core::acl::{AclDecision, AccessControlEngine, GeoEngine};
 use serverwall_core::balancer::LoadBalancer;
 use serverwall_core::error::ServerWallError;
 use serverwall_core::tls::build_tls_connector;
@@ -18,6 +18,7 @@ use serverwall_core::types::{Backend, ConnectionGuard};
 /// to "connected backend stream".
 pub struct RequestPipeline {
     acl: AccessControlEngine,
+    geo: Option<Arc<GeoEngine>>,
     balancer: Box<dyn LoadBalancer>,
     backends: Vec<Arc<Backend>>,
 }
@@ -26,24 +27,32 @@ impl RequestPipeline {
     /// Create a new request pipeline.
     pub fn new(
         acl: AccessControlEngine,
+        geo: Option<Arc<GeoEngine>>,
         balancer: Box<dyn LoadBalancer>,
         backends: Vec<Arc<Backend>>,
     ) -> Self {
         Self {
             acl,
+            geo,
             balancer,
             backends,
         }
     }
 
-    /// Check the ACL for a client IP.
+    /// Check the ACL (IP-based + geo) for a client IP.
     ///
     /// Returns `Ok(())` if the client is allowed, or an error if denied.
     pub fn check_acl(&self, client_ip: IpAddr) -> Result<(), ServerWallError> {
         match self.acl.evaluate(client_ip) {
-            AclDecision::Allow => Ok(()),
-            AclDecision::Deny => Err(ServerWallError::AccessDenied { ip: client_ip }),
+            AclDecision::Deny => return Err(ServerWallError::AccessDenied { ip: client_ip }),
+            AclDecision::Allow => {}
         }
+        if let Some(ref geo) = self.geo {
+            if geo.check(client_ip) == AclDecision::Deny {
+                return Err(ServerWallError::AccessDenied { ip: client_ip });
+            }
+        }
+        Ok(())
     }
 
     /// Select a backend using the configured load balancer.

@@ -3,7 +3,8 @@ use crate::inspection;
 use crate::request::HttpRequestContext;
 use crate::response::WafDecision;
 use crate::rules::matcher::RuleMatcher;
-use crate::rules::rule_set::CompiledRuleGroup;
+use crate::rules::parser::RuleParser;
+use crate::rules::rule_set::{CompiledRuleGroup, WafRule};
 
 /// Controls how the WAF engine behaves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +90,47 @@ impl WafEngine {
             paranoia_level,
             rule_groups,
             limits,
+        }
+    }
+
+    /// Create a WAF engine from a full ruleset config, including custom rules.
+    pub fn from_ruleset_config(config: &serverwall_core::config::schema::WafRulesetConfig) -> Self {
+        use serverwall_core::config::schema::WafMode as CfgWafMode;
+        let mode = match config.mode {
+            CfgWafMode::Blocking => WafMode::Blocking,
+            CfgWafMode::DetectionOnly => WafMode::DetectionOnly,
+            CfgWafMode::Disabled => WafMode::Disabled,
+        };
+
+        let mut engine = Self::with_config(
+            mode,
+            config.anomaly_threshold,
+            config.paranoia_level,
+            RequestLimits::default(),
+        );
+
+        let custom_rules = RuleParser::new().from_ruleset_config(config);
+        if !custom_rules.is_empty() {
+            engine.add_custom_rules(custom_rules);
+        }
+
+        engine
+    }
+
+    /// Add custom rules to this engine, grouping them into `CompiledRuleGroup`s by target.
+    fn add_custom_rules(&mut self, rules: Vec<WafRule>) {
+        // Group by the string representation of the first target (custom rules have one target).
+        let mut by_target: std::collections::HashMap<String, Vec<WafRule>> =
+            std::collections::HashMap::new();
+        for rule in rules {
+            let key = format!("{:?}", rule.targets.first());
+            by_target.entry(key).or_default().push(rule);
+        }
+
+        for (_, group_rules) in by_target {
+            if let Some(compiled) = CompiledRuleGroup::compile(group_rules) {
+                self.rule_groups.push(compiled);
+            }
         }
     }
 

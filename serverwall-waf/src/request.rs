@@ -13,6 +13,8 @@ pub struct HttpRequestContext {
     pub body: Vec<u8>,
     pub remote_addr: IpAddr,
     pub protocol: String,
+    /// JA3 TLS fingerprint, if the connection was TLS and the ClientHello was parseable.
+    pub ja3_fingerprint: Option<String>,
 }
 
 impl HttpRequestContext {
@@ -23,6 +25,7 @@ impl HttpRequestContext {
         headers: HashMap<String, String>,
         body: Vec<u8>,
         client_ip: IpAddr,
+        ja3_fingerprint: Option<String>,
     ) -> Self {
         // Split URI into path and query string
         let (path, query_string) = if let Some(idx) = uri.find('?') {
@@ -70,6 +73,7 @@ impl HttpRequestContext {
             body,
             remote_addr: client_ip,
             protocol,
+            ja3_fingerprint,
         }
     }
 

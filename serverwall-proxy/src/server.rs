@@ -5,17 +5,39 @@ use std::sync::atomic::Ordering;
 use tokio::net::TcpStream;
 use tokio::sync::watch;
 
-use serverwall_core::acl::AccessControlEngine;
+use serverwall_core::acl::{AccessControlEngine, GeoEngine};
 use serverwall_core::balancer::{IpHash, LeastConnections, LoadBalancer, RoundRobin};
 use serverwall_core::config::schema::{
     BalanceMethod, ServerWallConfig, ProtocolType,
 };
 use serverwall_core::health::HealthChecker;
-use serverwall_core::tls::{CertStore, build_tls_acceptor};
+use serverwall_core::tls::{CertStore, build_tls_acceptor, staple_certified_key};
 use serverwall_core::types::{Backend, BackendId};
 
-use serverwall_antispam::lists::{Blocklist, Whitelist};
+use serverwall_antispam::lists::{AllowList, BlockList};
 use serverwall_antispam::pipeline::AntispamPipeline;
+use serverwall_waf::rate_limit::{RateLimiter, RateLimitKey};
+use serverwall_antispam::predata::{
+    BehaviorCheck, DnsblCheck, DnsblZone, EarlyTalkerCheck, HeloCheck,
+    ReverseDnsCheck, ResidentialSenderCheck, SmtpRateLimitCheck, SpfCheck, SpfSeverity,
+};
+use serverwall_antispam::postdata::{
+    AntivirusCheck, ArcCheck, AttachmentCheck, BulkDetectionCheck,
+    CharsetCheck, ContentCheck, DkimCheck, DmarcCheck, HeaderAnalysisCheck,
+    HtmlAnalysisCheck, RatioAnalysisCheck, ScannerDef, UrlAnalysisCheck,
+};
+use serverwall_core::config::schema::AntispamConfig;
+
+use serverwall_relay::bounce::BounceGenerator;
+use serverwall_relay::delivery::{DeliveryManager, MxResolver, OutboundTls, SmtpSender};
+use serverwall_relay::dkim::{DkimKeyStore, DkimSigner};
+use serverwall_relay::outbound_policy::{
+    OutboundContentPolicy, OutboundPolicyChecker, OutboundRateLimit, RecipientLimit,
+    SpfAlignmentCheck,
+};
+use serverwall_relay::queue::{FilesystemSpool, RetryScheduler};
+use serverwall_relay::receiver::SmtpReceiver;
+use serverwall_relay::trusted_hosts::TrustedHosts;
 
 use crate::listener::TcpListenerTask;
 use crate::listener::TlsListenerTask;
@@ -79,6 +101,28 @@ impl Server {
             }
         }
 
+        // Build geo engine once (shared across all frontends).
+        let geo_engine: Option<Arc<GeoEngine>> =
+            GeoEngine::from_config(&self.config.security.geo).map(Arc::new);
+
+        // Start relay daemon (delivery manager + optional inbound receiver).
+        if self.config.relay.enabled {
+            match build_relay(&self.config.relay, shutdown_rx.clone()) {
+                Ok(relay_handles) => tasks.extend(relay_handles),
+                Err(e) => tracing::error!(error = %e, "relay startup failed — relay disabled"),
+            }
+        }
+
+        // Build HTTP rate limiters from security config (shared across HTTPS frontends).
+        let rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>> = self.config.security.rate_limit
+            .iter()
+            .map(|r| {
+                let limiter = RateLimiter::with_limits(r.requests, r.window_secs);
+                let key = RateLimitKey::from_str(&r.key);
+                Arc::new((limiter, key))
+            })
+            .collect();
+
         // Start a listener for each frontend
         for frontend in &self.config.frontend {
             let pool_backends = pools
@@ -91,7 +135,7 @@ impl Server {
             let acl = AccessControlEngine::from_config(&frontend.acl)
                 .map_err(|e| anyhow::anyhow!("ACL config error in frontend '{}': {}", frontend.name, e))?;
 
-            let pipeline = Arc::new(RequestPipeline::new(acl, balancer, pool_backends));
+            let pipeline = Arc::new(RequestPipeline::new(acl, geo_engine.clone(), balancer, pool_backends));
 
             match frontend.protocol {
                 ProtocolType::Tcp => {
@@ -148,6 +192,14 @@ impl Server {
                     let cert_store = Arc::new(CertStore::new());
                     let certified_key = CertStore::load_from_frontend(frontend)
                         .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
+
+                    // Optionally fetch and attach an OCSP staple.
+                    let certified_key = if self.config.security.tls.ocsp_stapling {
+                        staple_certified_key(certified_key).await
+                    } else {
+                        certified_key
+                    };
+
                     cert_store.add_from_cert(certified_key.clone());
                     cert_store.set_default(certified_key);
 
@@ -161,13 +213,40 @@ impl Server {
                         acceptor,
                     );
 
-                    // Build WAF engine if enabled
+                    // Build WAF engine if enabled, using the named ruleset config if present.
                     let waf = if frontend.waf_enabled {
-                        Some(std::sync::Arc::new(
-                            serverwall_waf::WafEngine::new(serverwall_waf::WafMode::Blocking),
-                        ))
+                        let engine = if let Some(ref ruleset_name) = frontend.waf_ruleset {
+                            self.config
+                                .waf_ruleset
+                                .iter()
+                                .find(|r| &r.name == ruleset_name)
+                                .map(|r| serverwall_waf::WafEngine::from_ruleset_config(r))
+                                .unwrap_or_else(|| {
+                                    tracing::warn!(
+                                        frontend = %frontend.name,
+                                        ruleset = %ruleset_name,
+                                        "WAF ruleset not found, using defaults",
+                                    );
+                                    serverwall_waf::WafEngine::new(serverwall_waf::WafMode::Blocking)
+                                })
+                        } else {
+                            serverwall_waf::WafEngine::new(serverwall_waf::WafMode::Blocking)
+                        };
+                        Some(std::sync::Arc::new(engine))
                     } else {
                         None
+                    };
+
+                    // Build path ACL from global security config if any rules are defined.
+                    let path_acl = {
+                        let acl = serverwall_core::acl::PathAcl::from_config(
+                            &self.config.security.acl.path_patterns,
+                        );
+                        if acl.is_empty() {
+                            None
+                        } else {
+                            Some(Arc::new(acl))
+                        }
                     };
 
                     let http_proxy = Arc::new(HttpProxy::new(
@@ -175,6 +254,12 @@ impl Server {
                         self.config.security.headers.clone(),
                         waf,
                         pipeline.clone(),
+                        path_acl,
+                        self.config.security.bot_detection.clone(),
+                        self.config.security.tls.hsts_max_age,
+                        self.config.security.tls.hsts_include_subdomains,
+                        rate_limiters.clone(),
+                        self.config.security.cookies.clone(),
                     ));
 
                     let rx = shutdown_rx.clone();
@@ -220,8 +305,8 @@ impl Server {
                     let frontend_name = frontend.name.clone();
                     let pipeline = pipeline.clone();
                     let antispam_pipeline = build_antispam_pipeline(&self.config.antispam);
-                    let whitelist = build_whitelist(&self.config.antispam);
-                    let blocklist = build_blocklist(&self.config.antispam);
+                    let allow_list = build_allow_list(&self.config.antispam);
+                    let block_list = build_block_list(&self.config.antispam);
                     let hostname = self.config.global.daemon_name.clone();
 
                     tasks.push(tokio::spawn(async move {
@@ -229,8 +314,8 @@ impl Server {
                             listener,
                             pipeline,
                             antispam_pipeline,
-                            whitelist,
-                            blocklist,
+                            allow_list,
+                            block_list,
                             hostname,
                             &frontend_name,
                             rx,
@@ -262,8 +347,8 @@ impl Server {
                     let frontend_name = frontend.name.clone();
                     let pipeline = pipeline.clone();
                     let antispam_pipeline = build_antispam_pipeline(&self.config.antispam);
-                    let whitelist = build_whitelist(&self.config.antispam);
-                    let blocklist = build_blocklist(&self.config.antispam);
+                    let allow_list = build_allow_list(&self.config.antispam);
+                    let block_list = build_block_list(&self.config.antispam);
                     let hostname = self.config.global.daemon_name.clone();
 
                     tasks.push(tokio::spawn(async move {
@@ -271,8 +356,8 @@ impl Server {
                             listener,
                             pipeline,
                             antispam_pipeline,
-                            whitelist,
-                            blocklist,
+                            allow_list,
+                            block_list,
                             hostname,
                             &frontend_name,
                             rx,
@@ -466,7 +551,7 @@ async fn run_imap_frontend(
 
     listener
         .run(
-            move |tls_stream, peer_addr, _local_addr, sni| {
+            move |tls_stream, peer_addr, _local_addr, sni, ja3| {
                 let pipeline = pipeline.clone();
                 let name = name.clone();
 
@@ -477,6 +562,7 @@ async fn run_imap_frontend(
                             frontend = %name,
                             client = %peer_addr,
                             sni = sni.as_deref().unwrap_or("-"),
+                            ja3 = ja3.as_deref().unwrap_or("-"),
                             error = %e,
                             "IMAP connection denied by ACL",
                         );
@@ -530,6 +616,7 @@ async fn run_imap_frontend(
                                 bytes_in = result.bytes_from_client,
                                 bytes_out = result.bytes_from_backend,
                                 duration_secs = result.duration_secs,
+                                ja3 = ja3.as_deref().unwrap_or("-"),
                                 "IMAP session completed",
                             );
                         }
@@ -562,7 +649,7 @@ async fn run_https_frontend(
 
     listener
         .run(
-            move |tls_stream, peer_addr, _local_addr, _sni| {
+            move |tls_stream, peer_addr, _local_addr, _sni, ja3| {
                 let pipeline = pipeline.clone();
                 let name = name.clone();
                 let http_proxy = http_proxy.clone();
@@ -582,7 +669,7 @@ async fn run_https_frontend(
                     // Backend is selected per-request inside handle_connection
                     // (supports sticky-session routing based on request cookies).
                     if let Err(e) = http_proxy
-                        .handle_connection(tls_stream, peer_addr.ip())
+                        .handle_connection(tls_stream, peer_addr.ip(), ja3)
                         .await
                     {
                         tracing::debug!(
@@ -655,26 +742,158 @@ fn build_balancer(method: BalanceMethod) -> Box<dyn LoadBalancer> {
     }
 }
 
-/// Build antispam pipeline from config.
-fn build_antispam_pipeline(_config: &serverwall_core::config::schema::AntispamConfig) -> Arc<AntispamPipeline> {
-    Arc::new(AntispamPipeline::empty())
+/// Build antispam pipeline from config, wiring all enabled checks.
+fn build_antispam_pipeline(config: &AntispamConfig) -> Arc<AntispamPipeline> {
+    if !config.enabled {
+        return Arc::new(AntispamPipeline::empty());
+    }
+
+    let mut pre: Vec<Box<dyn serverwall_antispam::pipeline::PreDataCheck>> = Vec::new();
+    let mut post: Vec<Box<dyn serverwall_antispam::pipeline::PostDataCheck>> = Vec::new();
+
+    // Pre-data checks
+    if config.dnsbl.enabled && !config.dnsbl.lists.is_empty() {
+        let zones = config.dnsbl.lists.iter().map(|l| DnsblZone {
+            zone: l.zone.clone(),
+            weight_multiplier: l.weight_multiplier,
+            reject_on_hit: l.reject_on_hit,
+        }).collect();
+        pre.push(Box::new(DnsblCheck::new(zones, config.dnsbl.weight)));
+    }
+    if config.spf.enabled {
+        let severity = SpfSeverity {
+            fail: config.spf.severity.fail,
+            softfail: config.spf.severity.softfail,
+            neutral: config.spf.severity.neutral,
+            none: config.spf.severity.none,
+        };
+        pre.push(Box::new(SpfCheck::new(config.spf.weight, severity)));
+    }
+    if config.rdns.enabled {
+        pre.push(Box::new(ReverseDnsCheck::new(config.rdns.weight)));
+    }
+    if config.residential_spf.enabled {
+        let c = &config.residential_spf;
+        pre.push(Box::new(ResidentialSenderCheck::new(
+            c.weight,
+            c.reject,
+            c.check_pbl,
+            c.pbl_zone.clone(),
+            c.softfail_triggers,
+            c.neutral_triggers,
+        )));
+    }
+    if config.helo.enabled {
+        pre.push(Box::new(HeloCheck::new(config.helo.weight)));
+    }
+    if config.rate_limit.enabled {
+        let window = parse_smtp_duration(&config.rate_limit.per_ip.window);
+        pre.push(Box::new(SmtpRateLimitCheck::new(
+            config.rate_limit.weight,
+            config.rate_limit.per_ip.max,
+            config.rate_limit.per_domain.max,
+            config.rate_limit.per_sender.max,
+            window,
+        )));
+    }
+    if config.early_talker.enabled {
+        pre.push(Box::new(EarlyTalkerCheck::new(config.early_talker.weight)));
+    }
+    // BehaviorCheck has no dedicated config section — always include at low weight
+    pre.push(Box::new(BehaviorCheck::new(0.5)));
+
+    // Post-data checks
+    if config.dkim.enabled {
+        post.push(Box::new(DkimCheck::new(config.dkim.weight)));
+    }
+    // ArcCheck has no dedicated config section — always include at low weight
+    post.push(Box::new(ArcCheck::new(0.5)));
+    if config.dmarc.enabled {
+        post.push(Box::new(DmarcCheck::new(config.dmarc.weight, config.dmarc.honor_reject_policy)));
+    }
+    if config.content.enabled {
+        post.push(Box::new(ContentCheck::new(config.content.weight)));
+    }
+    if config.url_analysis.enabled {
+        post.push(Box::new(UrlAnalysisCheck::new(
+            config.url_analysis.weight,
+            config.url_analysis.surbl_zones.clone(),
+        )));
+    }
+    if config.attachment.enabled {
+        post.push(Box::new(AttachmentCheck::new(
+            config.attachment.weight,
+            config.attachment.dangerous_extensions.clone(),
+        )));
+    }
+    if config.html.enabled {
+        post.push(Box::new(HtmlAnalysisCheck::new(config.html.weight)));
+    }
+    if config.header_analysis.enabled {
+        post.push(Box::new(HeaderAnalysisCheck::new(config.header_analysis.weight)));
+    }
+    if config.charset.enabled {
+        post.push(Box::new(CharsetCheck::new(config.charset.weight)));
+    }
+    if config.bulk.enabled {
+        post.push(Box::new(BulkDetectionCheck::new(config.bulk.weight)));
+    }
+    if config.ratio.enabled {
+        post.push(Box::new(RatioAnalysisCheck::new(config.ratio.weight)));
+    }
+    if config.antivirus.enabled && !config.antivirus.scanners.is_empty() {
+        let scanners = config.antivirus.scanners.iter().map(|s| ScannerDef {
+            name: s.name.clone(),
+            command: s.command.clone(),
+            clean_exit_codes: s.clean_exit_codes.clone(),
+            virus_exit_codes: s.virus_exit_codes.clone(),
+            virus_name_pattern: s.virus_name_pattern.as_ref()
+                .and_then(|p| regex::Regex::new(p).ok()),
+        }).collect();
+        post.push(Box::new(AntivirusCheck::new(
+            config.antivirus.weight,
+            config.antivirus.reject_on_virus,
+            scanners,
+        )));
+    }
+
+    Arc::new(AntispamPipeline::new(config.clone(), pre, post))
 }
 
-/// Build whitelist from config.
-fn build_whitelist(config: &serverwall_core::config::schema::AntispamConfig) -> Arc<Whitelist> {
-    Arc::new(Whitelist::from_config(
-        config.whitelist.ips.clone(),
-        config.whitelist.senders.clone(),
-        config.whitelist.sender_domains.clone(),
+/// Parse a duration string like "5m", "2h", "1d", "30s" → std::time::Duration.
+fn parse_smtp_duration(s: &str) -> std::time::Duration {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix('s').and_then(|n| n.parse::<u64>().ok()) {
+        return std::time::Duration::from_secs(n);
+    }
+    if let Some(n) = s.strip_suffix('m').and_then(|n| n.parse::<u64>().ok()) {
+        return std::time::Duration::from_secs(n * 60);
+    }
+    if let Some(n) = s.strip_suffix('h').and_then(|n| n.parse::<u64>().ok()) {
+        return std::time::Duration::from_secs(n * 3600);
+    }
+    if let Some(n) = s.strip_suffix('d').and_then(|n| n.parse::<u64>().ok()) {
+        return std::time::Duration::from_secs(n * 86400);
+    }
+    std::time::Duration::from_secs(3600) // fallback: 1 hour
+}
+
+/// Build allow list from config.
+fn build_allow_list(config: &serverwall_core::config::schema::AntispamConfig) -> Arc<AllowList> {
+    Arc::new(AllowList::from_config(
+        config.allow.ips.clone(),
+        config.allow.senders.clone(),
+        config.allow.sender_domains.clone(),
     ))
 }
 
-/// Build blocklist from config.
-fn build_blocklist(config: &serverwall_core::config::schema::AntispamConfig) -> Arc<Blocklist> {
-    Arc::new(Blocklist::from_config(
-        config.blocklist.ips.clone(),
-        config.blocklist.senders.clone(),
-        config.blocklist.sender_domains.clone(),
+/// Build block list from config.
+fn build_block_list(config: &serverwall_core::config::schema::AntispamConfig) -> Arc<BlockList> {
+    Arc::new(BlockList::from_config(
+        config.block.ips.clone(),
+        config.block.senders.clone(),
+        config.block.sender_domains.clone(),
+        config.block.recipients.clone(),
     ))
 }
 
@@ -683,8 +902,8 @@ async fn run_smtps_frontend(
     listener: TlsListenerTask,
     pipeline: Arc<RequestPipeline>,
     antispam_pipeline: Arc<AntispamPipeline>,
-    whitelist: Arc<Whitelist>,
-    blocklist: Arc<Blocklist>,
+    allow_list: Arc<AllowList>,
+    block_list: Arc<BlockList>,
     hostname: String,
     frontend_name: &str,
     shutdown_rx: watch::Receiver<bool>,
@@ -693,12 +912,12 @@ async fn run_smtps_frontend(
 
     listener
         .run(
-            move |tls_stream, peer_addr, _local_addr, _sni| {
+            move |tls_stream, peer_addr, _local_addr, _sni, ja3| {
                 let pipeline = pipeline.clone();
                 let name = name.clone();
                 let antispam = antispam_pipeline.clone();
-                let wl = whitelist.clone();
-                let bl = blocklist.clone();
+                let wl = allow_list.clone();
+                let bl = block_list.clone();
                 let host = hostname.clone();
 
                 async move {
@@ -734,6 +953,7 @@ async fn run_smtps_frontend(
                         wl,
                         bl,
                         host,
+                        ja3.clone(),
                     );
 
                     match proxy.proxy(tls_stream, peer_addr).await {
@@ -749,6 +969,7 @@ async fn run_smtps_frontend(
                                 bytes_in = result.bytes_from_client,
                                 bytes_out = result.bytes_from_backend,
                                 duration_secs = result.duration_secs,
+                                ja3 = ja3.as_deref().unwrap_or("-"),
                                 "SMTPS session completed",
                             );
                         }
@@ -778,8 +999,8 @@ async fn run_smtp_starttls_frontend(
     listener: TcpListenerTask,
     pipeline: Arc<RequestPipeline>,
     antispam_pipeline: Arc<AntispamPipeline>,
-    whitelist: Arc<Whitelist>,
-    blocklist: Arc<Blocklist>,
+    allow_list: Arc<AllowList>,
+    block_list: Arc<BlockList>,
     hostname: String,
     frontend_name: &str,
     shutdown_rx: watch::Receiver<bool>,
@@ -792,8 +1013,8 @@ async fn run_smtp_starttls_frontend(
                 let pipeline = pipeline.clone();
                 let name = name.clone();
                 let antispam = antispam_pipeline.clone();
-                let wl = whitelist.clone();
-                let bl = blocklist.clone();
+                let wl = allow_list.clone();
+                let bl = block_list.clone();
                 let host = hostname.clone();
 
                 async move {
@@ -829,6 +1050,7 @@ async fn run_smtp_starttls_frontend(
                         wl,
                         bl,
                         host,
+                        None, // No TLS at the listener level for STARTTLS
                     );
 
                     match proxy.proxy(tcp_stream, peer_addr).await {
@@ -865,6 +1087,79 @@ async fn run_smtp_starttls_frontend(
             shutdown_rx,
         )
         .await
+}
+
+/// Build and start the relay daemon: delivery manager + optional inbound SMTP receiver.
+fn build_relay(
+    config: &serverwall_core::config::schema::RelayConfig,
+    shutdown_rx: watch::Receiver<bool>,
+) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
+    let spool = Arc::new(FilesystemSpool::new(config.spool_dir.clone())?);
+    let scheduler = Arc::new(RetryScheduler::new(&config.retry));
+    let resolver = Arc::new(MxResolver::new()?);
+    let hostname = config.hostname.clone().unwrap_or_else(|| "localhost".to_string());
+    let tls = OutboundTls::new(&config.tls)?;
+    let sender = Arc::new(SmtpSender::new(hostname.clone(), Some(tls)));
+    let bounce_gen = Arc::new(BounceGenerator::new(
+        config.bounce.sender.clone(),
+        config.bounce.include_original_headers,
+    ));
+    let dkim_key_store = Arc::new(DkimKeyStore::new(&config.dkim.domains));
+    let dkim_signer = Arc::new(DkimSigner::new());
+    let delivery_manager = Arc::new(DeliveryManager::new(
+        spool.clone(),
+        scheduler,
+        resolver,
+        sender,
+        bounce_gen,
+        config.delivery_threads,
+    ));
+
+    let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+    let dm = delivery_manager.clone();
+    let rx = shutdown_rx.clone();
+    handles.push(tokio::spawn(async move { dm.run(rx).await }));
+
+    if !config.listen.is_empty() {
+        let listen_addrs: Vec<SocketAddr> = config.listen.iter()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        let trusted_hosts = Arc::new(TrustedHosts::new(&config.trusted_hosts));
+        let policy = Arc::new(OutboundPolicyChecker {
+            rate_limit: OutboundRateLimit::new(
+                config.outbound_policy.max_messages_per_domain_per_hour,
+            ),
+            content_policy: OutboundContentPolicy::new(&config.outbound_policy),
+            spf_alignment: SpfAlignmentCheck::new(vec![]),
+            recipient_limit: RecipientLimit::new(
+                config.outbound_policy.max_recipients_per_message,
+            ),
+        });
+        let receiver = Arc::new(SmtpReceiver::new(
+            listen_addrs,
+            hostname,
+            trusted_hosts,
+            spool,
+            policy,
+            config.dkim.enabled,
+            dkim_signer,
+            dkim_key_store,
+        ));
+        let rx = shutdown_rx.clone();
+        handles.push(tokio::spawn(async move {
+            if let Err(e) = receiver.run(rx).await {
+                tracing::error!(error = %e, "relay receiver error");
+            }
+        }));
+    }
+
+    tracing::info!(
+        hostname = %config.hostname.as_deref().unwrap_or("localhost"),
+        delivery_threads = config.delivery_threads,
+        "relay started",
+    );
+    Ok(handles)
 }
 
 /// Wait for a shutdown signal (Ctrl+C / SIGTERM).

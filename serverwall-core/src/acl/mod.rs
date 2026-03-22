@@ -1,14 +1,18 @@
 pub mod allow_list;
 pub mod block_list;
+pub mod geo;
 pub mod matcher;
 
 pub use allow_list::AllowList;
 pub use block_list::BlockList;
+pub use geo::GeoEngine;
 pub use matcher::IpMatcher;
 
 use std::net::IpAddr;
 
-use crate::config::schema::{AclDefaultAction, FrontendAclConfig};
+use regex::Regex;
+
+use crate::config::schema::{AclDefaultAction, FrontendAclConfig, PathPatternConfig};
 
 /// Result of an ACL evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +96,66 @@ impl AccessControlEngine {
     /// Convenience method: returns true if the IP is allowed.
     pub fn is_allowed(&self, ip: IpAddr) -> bool {
         self.evaluate(ip) == AclDecision::Allow
+    }
+}
+
+// =============================================================================
+// Path ACL
+// =============================================================================
+
+/// A path-based access control check.
+///
+/// Each rule contains one or more URL-path regex patterns and an associated
+/// action.  Patterns are tested against the request path in order; the first
+/// match wins.
+pub struct PathAcl {
+    /// (compiled patterns for a rule, should_block)
+    rules: Vec<(Vec<Regex>, bool)>,
+}
+
+impl PathAcl {
+    /// Build a `PathAcl` from the configured `[security.acl] path_patterns`.
+    ///
+    /// Invalid regex patterns are logged and skipped.
+    pub fn from_config(patterns: &[PathPatternConfig]) -> Self {
+        let mut rules = Vec::new();
+        for entry in patterns {
+            let block = entry.action.to_lowercase() == "block";
+            let mut compiled = Vec::new();
+            for raw in &entry.patterns {
+                match Regex::new(raw) {
+                    Ok(re) => compiled.push(re),
+                    Err(e) => tracing::warn!(pattern = %raw, error = %e, "invalid path ACL regex, skipping"),
+                }
+            }
+            if !compiled.is_empty() {
+                rules.push((compiled, block));
+            }
+        }
+        Self { rules }
+    }
+
+    /// Check a request path.
+    ///
+    /// Returns `Some(AclDecision::Deny)` if a blocking rule matches,
+    /// `Some(AclDecision::Allow)` if an allow rule matches, or `None` if no
+    /// rule matches (caller falls through to the default).
+    pub fn check(&self, path: &str) -> Option<AclDecision> {
+        for (patterns, block) in &self.rules {
+            if patterns.iter().any(|re| re.is_match(path)) {
+                return Some(if *block {
+                    AclDecision::Deny
+                } else {
+                    AclDecision::Allow
+                });
+            }
+        }
+        None
+    }
+
+    /// Returns `true` if there are no path rules configured.
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
     }
 }
 

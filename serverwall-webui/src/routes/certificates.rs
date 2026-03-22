@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use serverwall_core::{send_reload_signal, DEFAULT_PID_FILE};
+use serverwall_core::tls::AcmeManager;
 
 use crate::state::AppState;
 
@@ -288,15 +289,28 @@ fn default_challenge_port() -> u16 { 8081 }
 
 /// POST /api/certs/acme — trigger Let's Encrypt certificate issuance
 pub async fn acme_request(
-    State(_state): State<AppState>,
-    Json(_req): Json<AcmeRequest>,
+    State(state): State<AppState>,
+    Json(req): Json<AcmeRequest>,
 ) -> (StatusCode, Json<Value>) {
-    // ACME issuance is not yet fully implemented in serverwall-core.
-    // Return a helpful message for now.
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({"error": "ACME/Let's Encrypt issuance is not yet implemented"})),
-    )
+    let config = state.config.load();
+    let cert_dir = config.global.cert_dir.clone();
+    let acme_cfg = config.acme.clone();
+    drop(config);
+
+    let manager = AcmeManager::new(&acme_cfg);
+    match manager.order_one(&req.domain, &req.email, &cert_dir, req.challenge_port).await {
+        Ok(()) => {
+            state.reload_config();
+            (
+                StatusCode::OK,
+                Json(json!({"issued": true, "domain": req.domain})),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+        ),
+    }
 }
 
 /// DELETE /api/certs/:name — remove cert+key files

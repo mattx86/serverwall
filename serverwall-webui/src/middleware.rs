@@ -186,6 +186,7 @@ pub async fn waf_check(
         headers_map,
         body_bytes.to_vec(),
         client_ip,
+        None, // JA3 is not available in the web UI path
     );
 
     let verdict = state.waf_engine.inspect(&ctx);

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - IP ACL</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.acl-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
+.list-table{width:100%;border-collapse:collapse;font-size:.85rem}
+.list-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
+.list-table td:last-child{width:60px;text-align:right}
+.section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:.8rem 0 .4rem}
+.add-row{display:flex;gap:.4rem;margin-top:.5rem}
+.add-row input{flex:1}
+.note{font-size:.8rem;color:var(--muted);margin-top:1rem;padding:.5rem .8rem;background:rgba(255,255,255,.03);border-left:3px solid var(--border);border-radius:0 4px 4px 0}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">Global IP ACL</h2>
+    </div>
+
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <div class="form-panel">
+      <p style="margin:0 0 1rem;font-size:.88rem;color:var(--muted)">
+        The global IP ACL applies to all frontends before per-frontend rules. Supports individual IPs and CIDR ranges (e.g. <code>10.0.0.0/8</code>).
+        Block list takes priority over allow list.
+      </p>
+
+      <div class="acl-grid">
+
+        <!-- Allow list -->
+        <div>
+          <div class="section-label" style="margin-top:0;color:var(--success,#4ade80)">Allow List</div>
+          <table class="list-table"><tbody id="allowRows"></tbody></table>
+          <div class="add-row">
+            <input type="text" id="allowInput" placeholder="192.168.1.0/24">
+            <button class="btn btn-sm btn-primary" onclick="addIp('allow')">Add</button>
+          </div>
+        </div>
+
+        <!-- Block list -->
+        <div>
+          <div class="section-label" style="margin-top:0;color:var(--danger,#f87171)">Block List</div>
+          <table class="list-table"><tbody id="blockRows"></tbody></table>
+          <div class="add-row">
+            <input type="text" id="blockInput" placeholder="203.0.113.0/24">
+            <button class="btn btn-sm btn-danger" onclick="addIp('block')">Add</button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="note">
+        Changes apply immediately to the daemon. Per-frontend ACL rules are managed via <code>serverwall.toml</code> under each <code>[[frontend]]</code> section.
+      </div>
+    </div>
+
+    <!-- Per-frontend ACL (read-only) -->
+    <div class="form-panel" style="margin-top:1rem">
+      <div class="section-label" style="margin-top:0">Per-Frontend ACL (read-only)</div>
+      <div id="frontendAcls" style="font-size:.85rem;color:var(--muted)">Loading…</div>
+    </div>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+function renderList(tbodyId, items, listType) {
+  var tbody = document.getElementById(tbodyId);
+  if (!items || items.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="2" style="color:var(--muted);font-style:italic">Empty</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(function(ip) {
+    return '<tr><td><code>' + esc(ip) + '</code></td>' +
+      '<td><button class="btn btn-sm btn-danger" onclick="removeIp(\'' + listType + '\',\'' + esc(ip) + '\')">✕</button></td></tr>';
+  }).join('');
+}
+
+async function loadAcl() {
+  try {
+    var [gr, fr] = await Promise.all([
+      fetch('/api/acl/global', {headers: authHeaders()}),
+      fetch('/api/acl', {headers: authHeaders()}),
+    ]);
+    var g = await gr.json();
+    var f = await fr.json();
+
+    renderList('allowRows', g.allow, 'allow');
+    renderList('blockRows', g.block, 'block');
+
+    var acls = f.acls || [];
+    if (acls.length === 0) {
+      document.getElementById('frontendAcls').textContent = 'No frontends configured.';
+    } else {
+      document.getElementById('frontendAcls').innerHTML = acls.map(function(a) {
+        var allow = (a.allow_list || []).length ? a.allow_list.map(function(ip){ return '<code>'+esc(ip)+'</code>'; }).join(' ') : '<em>any</em>';
+        var block = (a.block_list || []).length ? a.block_list.map(function(ip){ return '<code>'+esc(ip)+'</code>'; }).join(' ') : '<em>none</em>';
+        return '<div style="margin-bottom:.6rem"><strong>' + esc(a.frontend) + '</strong>' +
+          ' <span style="color:var(--muted)">default: ' + esc(a.default_action) + '</span>' +
+          '<br>allow: ' + allow + ' &nbsp; block: ' + block + '</div>';
+      }).join('');
+    }
+  } catch(e) {
+    document.getElementById('loadError').textContent = 'Failed to load: ' + e.message;
+    document.getElementById('loadError').style.display = '';
+  }
+}
+
+async function addIp(listType) {
+  var val = document.getElementById(listType + 'Input').value.trim();
+  if (!val) return;
+  try {
+    var r = await fetch('/api/acl/global/' + listType, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ip: val}),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    document.getElementById(listType + 'Input').value = '';
+    loadAcl();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+async function removeIp(listType, ip) {
+  try {
+    var r = await fetch('/api/acl/global/' + listType + '/' + encodeURIComponent(ip), {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Failed'); return; }
+    loadAcl();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+initPage('acl');
+loadAcl();
+</script>
+</body>
+</html>

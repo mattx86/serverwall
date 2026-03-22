@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - SPF</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.dns-box{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:.7rem 1rem;font-family:monospace;font-size:.82rem;word-break:break-all;margin:.5rem 0 1rem}
+.mech-row{display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem}
+.mech-row select{width:7rem}
+.mech-row input{flex:1}
+.mech-row .btn-sm{flex-shrink:0}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">SPF Records</h2>
+      <button class="btn btn-primary" onclick="toggleAddForm()">+ Add Domain</button>
+    </div>
+
+    <div id="addForm" style="display:none" class="form-panel">
+      <h3 style="margin:0 0 1rem" id="formTitle">Add SPF Record</h3>
+      <input type="hidden" id="editDomain">
+      <div class="form-row">
+        <label>Domain</label>
+        <input type="text" id="fDomain" placeholder="example.com">
+      </div>
+
+      <div class="form-row">
+        <label>Mechanisms</label>
+        <div id="mechList"></div>
+        <button class="btn btn-sm" style="margin-top:.4rem" onclick="addMech()">+ Add Mechanism</button>
+      </div>
+
+      <div class="form-row">
+        <label>All qualifier</label>
+        <select id="fAll">
+          <option value="-all">-all (fail — recommended)</option>
+          <option value="~all">~all (softfail)</option>
+          <option value="?all">?all (neutral)</option>
+          <option value="+all">+all (pass — not recommended)</option>
+        </select>
+      </div>
+
+      <div id="formError" class="error-msg" style="display:none"></div>
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button class="btn btn-primary" onclick="saveDomain()">Save</button>
+        <button class="btn" onclick="hideAddForm()">Cancel</button>
+      </div>
+      <div id="spfPreview" style="display:none;margin-top:1rem">
+        <p style="margin:.8rem 0 .3rem;font-size:.9rem"><strong>SPF DNS TXT record to publish:</strong></p>
+        <div class="dns-box" id="spfPreviewText"></div>
+      </div>
+    </div>
+
+    <div id="domainsPanel">
+      <div id="loadMsg" style="color:var(--muted);padding:1rem">Loading…</div>
+      <table id="domainsTable" style="display:none">
+        <thead><tr>
+          <th>Domain</th><th>Mechanisms</th><th>All</th><th style="width:180px"></th>
+        </tr></thead>
+        <tbody id="domainRows"></tbody>
+      </table>
+      <div id="emptyMsg" style="display:none;color:var(--muted);padding:1rem">No SPF domains configured.</div>
+    </div>
+
+    <div id="recordPanel" style="display:none">
+      <h3>SPF Record — <span id="recordForDomain"></span></h3>
+      <div class="dns-box" id="panelRecord"></div>
+      <button class="btn" onclick="hideRecordPanel()">Close</button>
+    </div>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+var MECH_TYPES = ['include','ip4','ip6','a','mx','ptr','exists','all'];
+var VALUE_REQUIRED = ['include','ip4','ip6','ptr','exists'];
+
+function mechHtml(qualifier, mechanism, value) {
+  var qualOpts = ['+','~','-','?'].map(function(q){
+    return '<option value="'+q+'"'+(qualifier===q?' selected':'')+'>'+q+'</option>';
+  }).join('');
+  var mechOpts = MECH_TYPES.map(function(m){
+    return '<option value="'+m+'"'+(mechanism===m?' selected':'')+'>'+m+'</option>';
+  }).join('');
+  var val = value || '';
+  return '<div class="mech-row">' +
+    '<select onchange="updateMechRow(this)">' + qualOpts + '</select>' +
+    '<select onchange="updateMechRow(this)">' + mechOpts + '</select>' +
+    '<input type="text" placeholder="value" value="'+esc(val)+'">' +
+    '<button class="btn btn-sm btn-danger" onclick="removeMech(this)">✕</button>' +
+    '</div>';
+}
+
+function updateMechRow(sel) {
+  var row = sel.closest('.mech-row');
+  var mech = row.querySelectorAll('select')[1].value;
+  var inp  = row.querySelector('input');
+  inp.placeholder = VALUE_REQUIRED.includes(mech) ? mech + ':...' : '(optional)';
+}
+
+function addMech(q, m, v) {
+  var list = document.getElementById('mechList');
+  var div = document.createElement('div');
+  div.innerHTML = mechHtml(q||'+', m||'include', v||'');
+  list.appendChild(div.firstElementChild);
+}
+
+function removeMech(btn) {
+  btn.closest('.mech-row').remove();
+}
+
+function getMechs() {
+  var rows = document.querySelectorAll('#mechList .mech-row');
+  var result = [];
+  rows.forEach(function(row) {
+    var sels = row.querySelectorAll('select');
+    var inp  = row.querySelector('input');
+    var mech = sels[1].value;
+    if (mech === 'all') return; // all is handled by the "all qualifier" field
+    result.push({
+      qualifier: sels[0].value,
+      mechanism: mech,
+      value:     inp.value.trim() || null,
+    });
+  });
+  return result;
+}
+
+var _domainCache = [];
+
+async function loadAll() {
+  try {
+    var r = await fetch('/api/spf', {headers: authHeaders()});
+    var data = await r.json();
+    _domainCache = data.domains || [];
+    document.getElementById('loadMsg').style.display = 'none';
+    if (_domainCache.length === 0) {
+      document.getElementById('emptyMsg').style.display = '';
+      return;
+    }
+    var tbody = document.getElementById('domainRows');
+    tbody.innerHTML = '';
+    _domainCache.forEach(function(d) {
+      var mechSummary = (d.mechanisms || []).map(function(m) {
+        var q = m.qualifier === '+' ? '' : m.qualifier;
+        return q + m.mechanism + (m.value ? ':' + m.value : '');
+      }).join(' ');
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + esc(d.domain) + '</td>' +
+        '<td style="font-size:.82rem;font-family:monospace">' + esc(mechSummary || '—') + '</td>' +
+        '<td><code>' + esc(d.all) + '</code></td>' +
+        '<td>' +
+          '<button class="btn btn-sm" onclick="showRecord(\'' + esc(d.domain) + '\')">SPF Record</button> ' +
+          '<button class="btn btn-sm" onclick="editDomain(\'' + esc(d.domain) + '\')">Edit</button> ' +
+          '<button class="btn btn-sm btn-danger" onclick="deleteDomain(\'' + esc(d.domain) + '\')">Delete</button>' +
+        '</td>';
+      tbody.appendChild(tr);
+    });
+    document.getElementById('domainsTable').style.display = '';
+  } catch(e) {
+    document.getElementById('loadMsg').textContent = 'Failed to load: ' + e.message;
+  }
+}
+
+function toggleAddForm() {
+  var f = document.getElementById('addForm');
+  if (f.style.display === 'none') {
+    resetForm();
+    f.style.display = '';
+  } else {
+    f.style.display = 'none';
+  }
+}
+
+function hideAddForm() {
+  document.getElementById('addForm').style.display = 'none';
+}
+
+function resetForm() {
+  document.getElementById('formTitle').textContent = 'Add SPF Record';
+  document.getElementById('editDomain').value = '';
+  document.getElementById('fDomain').value = '';
+  document.getElementById('fDomain').disabled = false;
+  document.getElementById('fAll').value = '-all';
+  document.getElementById('mechList').innerHTML = '';
+  document.getElementById('formError').style.display = 'none';
+  document.getElementById('spfPreview').style.display = 'none';
+}
+
+function editDomain(domain) {
+  var d = _domainCache.find(function(x){return x.domain === domain;});
+  if (!d) return;
+  resetForm();
+  document.getElementById('formTitle').textContent = 'Edit SPF Record';
+  document.getElementById('editDomain').value = domain;
+  document.getElementById('fDomain').value = d.domain;
+  document.getElementById('fDomain').disabled = true;
+  document.getElementById('fAll').value = d.all || '-all';
+  (d.mechanisms || []).forEach(function(m) {
+    addMech(m.qualifier, m.mechanism, m.value);
+  });
+  document.getElementById('addForm').style.display = '';
+  document.getElementById('addForm').scrollIntoView({behavior:'smooth'});
+}
+
+async function saveDomain() {
+  var errEl = document.getElementById('formError');
+  var editing = document.getElementById('editDomain').value;
+  var domain = document.getElementById('fDomain').value.trim();
+  if (!domain) {
+    errEl.textContent = 'Domain is required.';
+    errEl.style.display = '';
+    return;
+  }
+  errEl.style.display = 'none';
+
+  var body = {
+    domain:     domain,
+    mechanisms: getMechs(),
+    all:        document.getElementById('fAll').value,
+  };
+  var url    = editing ? '/api/spf/' + encodeURIComponent(editing) : '/api/spf';
+  var method = editing ? 'PUT' : 'POST';
+  try {
+    var r = await fetch(url, {
+      method: method,
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    var res = await r.json();
+    if (!r.ok) {
+      errEl.textContent = res.error || 'Save failed';
+      errEl.style.display = '';
+      return;
+    }
+    if (res.spf_record) {
+      document.getElementById('spfPreviewText').textContent = res.spf_record;
+      document.getElementById('spfPreview').style.display = '';
+    }
+    loadAll();
+  } catch(e) {
+    errEl.textContent = 'Request failed: ' + e.message;
+    errEl.style.display = '';
+  }
+}
+
+async function showRecord(domain) {
+  try {
+    var r = await fetch('/api/spf/' + encodeURIComponent(domain) + '/record', {headers: authHeaders()});
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Error'); return; }
+    document.getElementById('recordForDomain').textContent = domain;
+    document.getElementById('panelRecord').textContent = res.spf_record;
+    document.getElementById('recordPanel').style.display = '';
+    document.getElementById('recordPanel').scrollIntoView({behavior:'smooth'});
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+function hideRecordPanel() {
+  document.getElementById('recordPanel').style.display = 'none';
+}
+
+async function deleteDomain(domain) {
+  if (!confirm('Remove SPF record for "' + domain + '"?')) return;
+  try {
+    var r = await fetch('/api/spf/' + encodeURIComponent(domain), {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    var res = await r.json();
+    if (!r.ok) { alert(res.error || 'Delete failed'); return; }
+    loadAll();
+  } catch(e) { alert('Request failed: ' + e.message); }
+}
+
+initPage('spf');
+loadAll();
+</script>
+</body>
+</html>

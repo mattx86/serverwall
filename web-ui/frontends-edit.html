@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Frontends</title>
+<title>ServerWall - Edit Frontend</title>
 <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
@@ -14,18 +14,15 @@
 <div id="layout">
   <div id="sidebar"></div>
   <div id="main">
-    <div class="toolbar" id="feToolbar">
-      <h2 style="margin:0;flex:1">Frontends</h2>
-      <button class="btn btn-primary" id="addBtn" onclick="showAddForm()">+ Add Frontend</button>
+    <div class="toolbar" style="margin-bottom:1rem">
+      <h2 style="margin:0;flex:1">Edit Frontend: <span id="feTitle" style="color:var(--muted);font-weight:400"></span></h2>
+      <a href="/ui/frontends.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
     </div>
 
-    <div id="addForm" class="form-panel" style="display:none">
-      <h3>Add Frontend</h3>
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <div id="editPanel" class="form-panel" style="display:none">
       <div class="form-grid">
-        <div class="form-group">
-          <label>Name *</label>
-          <input type="text" id="fName" placeholder="e.g. web" oninput="autoFillLog()">
-        </div>
         <div class="form-group">
           <label>Protocol *</label>
           <select id="fProtocol">
@@ -88,67 +85,32 @@
       <div style="margin-top:.8rem">
         <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">HTTP Headers</label>
         <div style="display:flex;gap:1rem;flex-wrap:wrap">
-          <label class="form-check"><input type="checkbox" id="fXFF" checked> X-Forwarded-For</label>
-          <label class="form-check"><input type="checkbox" id="fXRI" checked> X-Real-IP</label>
-          <label class="form-check"><input type="checkbox" id="fXFP" checked> X-Forwarded-Proto</label>
-          <label class="form-check"><input type="checkbox" id="fWaf" checked> WAF Enabled</label>
+          <label class="form-check"><input type="checkbox" id="fXFF"> X-Forwarded-For</label>
+          <label class="form-check"><input type="checkbox" id="fXRI"> X-Real-IP</label>
+          <label class="form-check"><input type="checkbox" id="fXFP"> X-Forwarded-Proto</label>
+          <label class="form-check"><input type="checkbox" id="fWaf"> WAF Enabled</label>
         </div>
       </div>
-      <div id="fError" class="form-error" style="display:none"></div>
+      <div id="saveError" class="form-error" style="display:none;margin-top:.8rem"></div>
       <div class="form-actions">
-        <button class="btn btn-primary" onclick="submitFrontend()">Create Frontend</button>
-        <button class="btn btn-secondary" onclick="hideAddForm()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveFrontend()">Save Changes</button>
+        <a href="/ui/frontends.html" class="btn btn-secondary">Cancel</a>
       </div>
     </div>
-
-    <table id="feTable">
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Protocol</th>
-          <th>Listen</th>
-          <th>Backend Pool</th>
-          <th>WAF</th>
-          <th>Max Conn</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="feBody">
-        <tr><td colspan="7">Loading...</td></tr>
-      </tbody>
-    </table>
   </div>
 </div>
 <script src="/ui/app.js"></script>
 <script>
+var feName = '';
 var _certMap = {};
 
-function showAddForm() {
-  document.getElementById('addForm').style.display = '';
-  document.getElementById('feTable').style.display = 'none';
-  document.getElementById('addBtn').style.display = 'none';
-  document.getElementById('fError').style.display = 'none';
-  populateDropdowns();
-}
-function hideAddForm() {
-  document.getElementById('addForm').style.display = 'none';
-  document.getElementById('feTable').style.display = '';
-  document.getElementById('addBtn').style.display = '';
+function getFeName() {
+  return new URLSearchParams(window.location.search).get('name') || '';
 }
 
 function toggleStickyField() {
   var isSticky = document.getElementById('fBalancer').value === 'sticky_session';
   document.getElementById('fStickyGroup').style.display = isSticky ? '' : 'none';
-}
-
-function autoFillLog() {
-  var name = document.getElementById('fName').value.trim();
-  var logEl = document.getElementById('fLogFile');
-  if (name) {
-    logEl.value = '/opt/serverwall/var/log/' + name + '.log';
-  } else {
-    logEl.value = '';
-  }
 }
 
 function syncCertFields() {
@@ -162,7 +124,7 @@ function syncCertFields() {
   }
 }
 
-async function populateDropdowns() {
+async function loadDropdowns(currentPool, currentWaf, currentCert) {
   // Pools
   try {
     var r = await fetch('/api/backends', {headers: authHeaders()});
@@ -172,6 +134,7 @@ async function populateDropdowns() {
     (d.pools || []).forEach(function(p) {
       var opt = document.createElement('option');
       opt.value = p.name; opt.textContent = p.name;
+      if (p.name === currentPool) opt.selected = true;
       poolSel.appendChild(opt);
     });
   } catch(e) {}
@@ -182,10 +145,10 @@ async function populateDropdowns() {
     var d2 = await r2.json();
     var wafSel = document.getElementById('fWafRuleset');
     wafSel.innerHTML = '<option value="">-- none --</option>';
-    (d2.waf_rules || []).forEach(function(w, i) {
+    (d2.waf_rules || []).forEach(function(w) {
       var opt = document.createElement('option');
       opt.value = w.name; opt.textContent = w.name;
-      if (i === 0) opt.selected = true;
+      if (w.name === currentWaf) opt.selected = true;
       wafSel.appendChild(opt);
     });
   } catch(e) {}
@@ -202,76 +165,92 @@ async function populateDropdowns() {
       if (!c.key_exists) return;
       var opt = document.createElement('option');
       opt.value = c.name; opt.textContent = c.name + (c.expiry ? '  (exp: '+c.expiry+')' : '');
+      // Match by cert_file path if current cert path ends with cert name
+      if (currentCert && currentCert.indexOf(c.name) !== -1) opt.selected = true;
       certSel.appendChild(opt);
       _certMap[c.name] = {
         cert: certsDir + c.cert_file,
         key:  certsDir + c.key_file,
       };
     });
+    syncCertFields();
   } catch(e) {}
 }
 
-async function loadFrontends() {
+async function loadFrontend() {
+  feName = getFeName();
+  if (!feName) {
+    document.getElementById('loadError').textContent = 'No frontend name specified.';
+    document.getElementById('loadError').style.display = '';
+    return;
+  }
+  document.getElementById('feTitle').textContent = feName;
+  document.title = 'ServerWall - Edit Frontend: ' + feName;
+
   try {
-    var r = await fetch('/api/frontends', {headers: authHeaders()});
+    var r = await fetch('/api/frontends/' + encodeURIComponent(feName), {headers: authHeaders()});
     var d = await r.json();
-    var rows = '';
-    (d.frontends || []).forEach(function(f) {
-      var listen = (f.listen || []).join(', ');
-      var waf = f.waf_enabled ? '<span class="badge badge-green">on</span>' : '<span class="badge badge-gray">off</span>';
-      var maxc = f.max_connections || '--';
-      rows += '<tr>';
-      rows += '<td><strong>'+esc(f.name)+'</strong></td>';
-      rows += '<td>'+esc(f.protocol)+'</td>';
-      rows += '<td style="font-size:.82rem">'+esc(listen)+'</td>';
-      rows += '<td>'+esc(f.backend_pool)+'</td>';
-      rows += '<td>'+waf+'</td>';
-      rows += '<td>'+maxc+'</td>';
-      rows += '<td>';
-      rows += '<a class="btn btn-secondary btn-sm" href="/ui/frontends-edit.html?name='+encodeURIComponent(f.name)+'">Edit</a> ';
-      rows += '<button class="btn btn-danger btn-sm" onclick="deleteFrontend(\''+esc(f.name)+'\')">Delete</button>';
-      rows += '</td>';
-      rows += '</tr>';
-    });
-    document.getElementById('feBody').innerHTML = rows || '<tr><td colspan="7" class="empty-state">No frontends configured</td></tr>';
-    checkSmtpFrontends();
+    if (!r.ok) {
+      document.getElementById('loadError').textContent = d.error || 'Failed to load frontend';
+      document.getElementById('loadError').style.display = '';
+      return;
+    }
+    var f = d.frontend;
+
+    // Populate form
+    setSelect('fProtocol', (f.protocol || 'https').toLowerCase());
+    document.getElementById('fListen').value   = (f.listen || []).join('\n');
+    document.getElementById('fMaxConn').value  = f.max_connections || '';
+    document.getElementById('fLogFile').value  = f.log_file || '';
+    document.getElementById('fXFF').checked    = !!(f.headers && f.headers.x_forwarded_for);
+    document.getElementById('fXRI').checked    = !!(f.headers && f.headers.x_real_ip);
+    document.getElementById('fXFP').checked    = !!(f.headers && f.headers.x_forwarded_proto);
+    document.getElementById('fWaf').checked    = !!f.waf_enabled;
+    setSelect('fBalancer', (f.balancer || 'round_robin').toLowerCase());
+    toggleStickyField();
+    if (f.session_cookie) document.getElementById('fStickyCookie').value = f.session_cookie;
+    if (f.acl) setSelect('fAclDefault', (f.acl.default_action || 'allow').toLowerCase());
+
+    await loadDropdowns(f.backend_pool, f.waf_ruleset, f.tls_cert);
+    document.getElementById('editPanel').style.display = '';
   } catch(e) {
-    document.getElementById('feBody').innerHTML = '<tr><td colspan="7">Error loading frontends</td></tr>';
+    document.getElementById('loadError').textContent = 'Request failed: ' + e.message;
+    document.getElementById('loadError').style.display = '';
   }
 }
 
-async function submitFrontend() {
-  var name     = document.getElementById('fName').value.trim();
-  var protocol = document.getElementById('fProtocol').value;
-  var listenRaw= document.getElementById('fListen').value.trim();
-  var pool     = document.getElementById('fPool').value.trim();
-  var errEl    = document.getElementById('fError');
+function setSelect(id, val) {
+  var el = document.getElementById(id);
+  for (var i = 0; i < el.options.length; i++) {
+    if (el.options[i].value === val) { el.selectedIndex = i; return; }
+  }
+}
 
-  if (!name || !listenRaw || !pool) {
-    errEl.textContent = 'Name, listen addresses, and backend pool are required.';
-    errEl.style.display = '';
-    return;
+async function saveFrontend() {
+  var errEl = document.getElementById('saveError');
+  errEl.style.display = 'none';
+
+  var listenRaw = document.getElementById('fListen').value.trim();
+  var pool      = document.getElementById('fPool').value.trim();
+  if (!listenRaw || !pool) {
+    errEl.textContent = 'Listen addresses and backend pool are required.';
+    errEl.style.display = ''; return;
   }
 
-  var listen = listenRaw.split('\n').map(function(s){return s.trim()}).filter(Boolean);
-
   var body = {
-    name: name,
-    protocol: protocol,
-    listen: listen,
+    name:        feName,
+    protocol:    document.getElementById('fProtocol').value,
+    listen:      listenRaw.split('\n').map(function(s){return s.trim()}).filter(Boolean),
     backend_pool: pool,
-    balancer: document.getElementById('fBalancer').value,
+    balancer:    document.getElementById('fBalancer').value,
     waf_enabled: document.getElementById('fWaf').checked,
     headers: {
-      x_forwarded_for: document.getElementById('fXFF').checked,
-      x_real_ip:       document.getElementById('fXRI').checked,
+      x_forwarded_for:   document.getElementById('fXFF').checked,
+      x_real_ip:         document.getElementById('fXRI').checked,
       x_forwarded_proto: document.getElementById('fXFP').checked,
     },
     acl: { default_action: document.getElementById('fAclDefault').value },
   };
-
-  var stickyCookie = document.getElementById('fStickyCookie').value.trim();
-  if (stickyCookie && body.balancer === 'sticky_session') body.session_cookie = stickyCookie;
 
   var wafRuleset = document.getElementById('fWafRuleset').value.trim();
   if (wafRuleset) body.waf_ruleset = wafRuleset;
@@ -288,42 +267,27 @@ async function submitFrontend() {
   var logFile = document.getElementById('fLogFile').value.trim();
   if (logFile) body.log_file = logFile;
 
+  var stickyCookie = document.getElementById('fStickyCookie').value.trim();
+  if (stickyCookie && body.balancer === 'sticky_session') body.session_cookie = stickyCookie;
+
   try {
-    var r = await fetch('/api/frontends', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify(body),
+    var r = await fetch('/api/frontends/' + encodeURIComponent(feName), {
+      method: 'PUT', headers: authHeaders(), body: JSON.stringify(body),
     });
     var res = await r.json();
     if (!r.ok) {
-      errEl.textContent = res.error || 'Create failed';
-      errEl.style.display = '';
-      return;
+      errEl.textContent = res.error || 'Save failed';
+      errEl.style.display = ''; return;
     }
-    hideAddForm();
-    loadFrontends();
+    window.location.href = '/ui/frontends.html';
   } catch(e) {
     errEl.textContent = 'Request failed: ' + e.message;
     errEl.style.display = '';
   }
 }
 
-async function deleteFrontend(name) {
-  if (!confirm('Delete frontend "' + name + '"?')) return;
-  try {
-    var r = await fetch('/api/frontends/' + encodeURIComponent(name), {
-      method: 'DELETE',
-      headers: authHeaders(),
-    });
-    if (!r.ok) { var d = await r.json(); alert(d.error || 'Delete failed'); return; }
-    loadFrontends();
-  } catch(e) { alert('Request failed'); }
-}
-
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-
 initPage('frontends');
-loadFrontends();
+loadFrontend();
 </script>
 </body>
 </html>

@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Logs</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+#logOutput{
+  background:#0d0d0d;
+  color:#c8c8c8;
+  font-family:'Courier New',Courier,monospace;
+  font-size:.78rem;
+  line-height:1.55;
+  padding:.8rem 1rem;
+  border-radius:6px;
+  border:1px solid var(--border);
+  height:520px;
+  overflow-y:auto;
+  white-space:pre-wrap;
+  word-break:break-all;
+}
+#logOutput .line-err{color:#f38ba8}
+#logOutput .line-warn{color:#f9e2af}
+#logOutput .line-info{color:#a6e3a1}
+.log-toolbar{display:flex;align-items:center;gap:.7rem;margin-bottom:.5rem;flex-wrap:wrap}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:.3rem}
+.status-dot.connected{background:#a6e3a1}
+.status-dot.disconnected{background:#f38ba8}
+.status-dot.idle{background:#6c7086}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">Logs</h2>
+    </div>
+
+    <div class="form-panel">
+      <div class="log-toolbar">
+        <div class="form-group" style="margin:0;display:flex;align-items:center;gap:.5rem">
+          <label style="white-space:nowrap;font-size:.85rem;color:var(--muted)">Frontend:</label>
+          <select id="frontendSelect" onchange="connectStream()" style="padding:.3rem .6rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:.85rem">
+            <option value="">-- select frontend --</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;font-size:.82rem;color:var(--muted);flex:1">
+          <span class="status-dot idle" id="statusDot"></span>
+          <span id="statusText">Not connected</span>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="togglePause()" id="pauseBtn" disabled>Pause</button>
+        <button class="btn btn-secondary btn-sm" onclick="clearLog()">Clear</button>
+        <button class="btn btn-secondary btn-sm" onclick="downloadLog()">Download</button>
+      </div>
+      <div id="logOutput"><span style="color:#6c7086">Select a frontend above to start streaming logs.</span></div>
+    </div>
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+var evtSource = null;
+var paused = false;
+var logLines = [];
+var MAX_LINES = 2000;
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+async function loadFrontends() {
+  try {
+    var r = await fetch('/api/frontends', {headers: authHeaders()});
+    var d = await r.json();
+    var sel = document.getElementById('frontendSelect');
+    sel.innerHTML = '<option value="">-- select frontend --</option>';
+    (d.frontends || []).forEach(function(f) {
+      var opt = document.createElement('option');
+      opt.value = f.name;
+      opt.textContent = f.name + ' (' + esc(f.protocol) + ')';
+      sel.appendChild(opt);
+    });
+    // Auto-select first
+    if (sel.options.length > 1) {
+      sel.selectedIndex = 1;
+      connectStream();
+    }
+  } catch(e) {}
+}
+
+function connectStream() {
+  var name = document.getElementById('frontendSelect').value;
+  if (evtSource) {
+    evtSource.close();
+    evtSource = null;
+  }
+  if (!name) {
+    setStatus('idle', 'Not connected');
+    document.getElementById('pauseBtn').disabled = true;
+    return;
+  }
+
+  var token = getCookie('lg_session');
+  var url = '/api/logs?frontend=' + encodeURIComponent(name);
+  // SSE doesn't support custom headers; we'll rely on the cookie for auth.
+  evtSource = new EventSource(url);
+
+  evtSource.onopen = function() {
+    setStatus('connected', 'Connected to ' + name);
+    document.getElementById('pauseBtn').disabled = false;
+  };
+
+  evtSource.onmessage = function(e) {
+    if (paused) return;
+    appendLine(e.data);
+  };
+
+  evtSource.onerror = function() {
+    setStatus('disconnected', 'Disconnected — reconnecting...');
+  };
+}
+
+function appendLine(text) {
+  var cls = '';
+  var lower = text.toLowerCase();
+  if (lower.indexOf('"error"') !== -1 || lower.indexOf(' error ') !== -1) cls = 'line-err';
+  else if (lower.indexOf(' warn ') !== -1)  cls = 'line-warn';
+  else if (lower.indexOf(' info ') !== -1)  cls = 'line-info';
+
+  logLines.push({text: text, cls: cls});
+  if (logLines.length > MAX_LINES) logLines.shift();
+
+  var out = document.getElementById('logOutput');
+  var span = document.createElement('span');
+  if (cls) span.className = cls;
+  span.textContent = text + '\n';
+  out.appendChild(span);
+
+  // Auto-scroll to bottom
+  out.scrollTop = out.scrollHeight;
+
+  // Trim DOM lines to MAX_LINES
+  while (out.childNodes.length > MAX_LINES) {
+    out.removeChild(out.firstChild);
+  }
+}
+
+function togglePause() {
+  paused = !paused;
+  document.getElementById('pauseBtn').textContent = paused ? 'Resume' : 'Pause';
+  if (!paused) {
+    var out = document.getElementById('logOutput');
+    out.scrollTop = out.scrollHeight;
+  }
+}
+
+function clearLog() {
+  logLines = [];
+  document.getElementById('logOutput').innerHTML = '';
+}
+
+function downloadLog() {
+  var content = logLines.map(function(l){ return l.text; }).join('\n');
+  var blob = new Blob([content], {type: 'text/plain'});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'serverwall-' + (document.getElementById('frontendSelect').value || 'log') + '.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function setStatus(state, text) {
+  var dot = document.getElementById('statusDot');
+  dot.className = 'status-dot ' + state;
+  document.getElementById('statusText').textContent = text;
+}
+
+initPage('logs');
+loadFrontends();
+</script>
+</body>
+</html>

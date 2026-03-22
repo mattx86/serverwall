@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - Security Settings</title>
+<link rel="stylesheet" href="/ui/app.css">
+<style>
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1.2rem}
+.tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
+.tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+.toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.toggle-row:last-of-type{border-bottom:none}
+.toggle-label{font-size:.88rem}
+.toggle-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
+.tag-list{display:flex;flex-wrap:wrap;gap:.35rem;margin:.4rem 0}
+.tag{display:inline-flex;align-items:center;gap:.3rem;background:rgba(255,255,255,.07);border-radius:3px;padding:.18rem .45rem;font-size:.8rem}
+.tag button{background:none;border:none;color:var(--muted);cursor:pointer;padding:0;line-height:1;font-size:.85rem}
+.tag button:hover{color:var(--danger,#f87171)}
+.add-inline{display:flex;gap:.4rem;margin-top:.4rem}
+.add-inline input{flex:1}
+.rl-table{width:100%;border-collapse:collapse;font-size:.85rem;margin-top:.6rem}
+.rl-table th{text-align:left;padding:.3rem .5rem;font-size:.75rem;color:var(--muted);font-weight:500}
+.rl-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
+.save-row{margin-top:1.2rem;display:flex;gap:.6rem;align-items:center}
+.save-ok{color:var(--success,#4ade80);font-size:.82rem;display:none}
+.save-err{color:var(--danger,#f87171);font-size:.82rem;display:none}
+</style>
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">Security Settings</h2>
+    </div>
+
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <div class="tabs">
+      <div class="tab active" onclick="switchTab('tls')">TLS Policy</div>
+      <div class="tab" onclick="switchTab('geo')">GeoIP</div>
+      <div class="tab" onclick="switchTab('headers')">HTTP Headers</div>
+      <div class="tab" onclick="switchTab('bot')">Bot Detection</div>
+      <div class="tab" onclick="switchTab('cookies')">Cookie Security</div>
+      <div class="tab" onclick="switchTab('ratelimit')">Rate Limiting</div>
+    </div>
+
+    <!-- Tab: TLS Policy -->
+    <div id="tab-tls" class="tab-panel active">
+      <div class="form-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Minimum TLS Version</label>
+            <select id="tlsMinVersion">
+              <option value="tls12">TLS 1.2</option>
+              <option value="tls13">TLS 1.3</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>HSTS max-age (seconds, 0 = disabled)</label>
+            <input type="number" id="tlsHstsMaxAge" min="0" placeholder="0">
+          </div>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">HSTS Include Subdomains</div>
+            <div class="toggle-sub">Apply HSTS to all subdomains</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="tlsHstsSubs"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">OCSP Stapling</div>
+            <div class="toggle-sub">Attach OCSP response to TLS handshake</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="tlsOcsp"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Verify Backend TLS Certificates</div>
+            <div class="toggle-sub">Validate certificates when connecting to backends over TLS</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="tlsBackendVerify"><span class="slider"></span></label>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveTls()">Save TLS Settings</button>
+          <span class="save-ok" id="tlsOk">Saved.</span>
+          <span class="save-err" id="tlsErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: GeoIP -->
+    <div id="tab-geo" class="tab-panel">
+      <div class="form-panel">
+        <div class="toggle-row" style="margin-bottom:.8rem">
+          <div>
+            <div class="toggle-label">GeoIP Enabled</div>
+            <div class="toggle-sub">Enable country-based IP filtering</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="geoEnabled"><span class="slider"></span></label>
+        </div>
+        <div class="form-group" style="margin-bottom:1rem">
+          <label>MaxMind Database Path</label>
+          <input type="text" id="geoDb" placeholder="/opt/serverwall/etc/GeoLite2-Country.mmdb">
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.25rem">Path to GeoLite2-Country.mmdb or GeoIP2-Country.mmdb</div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem">
+          <div>
+            <div class="section-label" style="color:var(--danger,#f87171);margin-top:0">Block Countries</div>
+            <div class="tag-list" id="geoBlockList"></div>
+            <div class="add-inline">
+              <input type="text" id="geoBlockInput" placeholder="CN" maxlength="2" style="text-transform:uppercase;width:5rem">
+              <button class="btn btn-sm btn-danger" onclick="addGeoCode('block')">Add</button>
+            </div>
+          </div>
+          <div>
+            <div class="section-label" style="color:var(--success,#4ade80);margin-top:0">Allow Countries Only</div>
+            <div class="tag-list" id="geoAllowList"></div>
+            <div class="add-inline">
+              <input type="text" id="geoAllowInput" placeholder="US" maxlength="2" style="text-transform:uppercase;width:5rem">
+              <button class="btn btn-sm btn-primary" onclick="addGeoCode('allow')">Add</button>
+            </div>
+            <div style="font-size:.75rem;color:var(--muted);margin-top:.4rem">If set, only these countries are allowed (overrides block list).</div>
+          </div>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveGeo()">Save GeoIP Settings</button>
+          <span class="save-ok" id="geoOk">Saved.</span>
+          <span class="save-err" id="geoErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: HTTP Headers -->
+    <div id="tab-headers" class="tab-panel">
+      <div class="form-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">X-Content-Type-Options: nosniff</div>
+            <div class="toggle-sub">Prevent MIME-type sniffing</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="hdrXcto"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Remove Server Header</div>
+            <div class="toggle-sub">Strip the Server: header from responses</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="hdrRmServer"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Remove X-Powered-By Header</div>
+            <div class="toggle-sub">Strip X-Powered-By: from responses</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="hdrRmXpb"><span class="slider"></span></label>
+        </div>
+        <div class="form-grid" style="margin-top:1rem">
+          <div class="form-group">
+            <label>X-Frame-Options</label>
+            <select id="hdrXfo">
+              <option value="">— none —</option>
+              <option value="DENY">DENY</option>
+              <option value="SAMEORIGIN">SAMEORIGIN</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Referrer-Policy</label>
+            <select id="hdrReferer">
+              <option value="">— none —</option>
+              <option value="no-referrer">no-referrer</option>
+              <option value="no-referrer-when-downgrade">no-referrer-when-downgrade</option>
+              <option value="same-origin">same-origin</option>
+              <option value="strict-origin">strict-origin</option>
+              <option value="strict-origin-when-cross-origin">strict-origin-when-cross-origin</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Content-Security-Policy</label>
+          <textarea id="hdrCsp" rows="3" placeholder="default-src 'self'; script-src 'self'" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem"></textarea>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveHeaders()">Save Header Settings</button>
+          <span class="save-ok" id="hdrOk">Saved.</span>
+          <span class="save-err" id="hdrErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Bot Detection -->
+    <div id="tab-bot" class="tab-panel">
+      <div class="form-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Bot Detection Enabled</div>
+            <div class="toggle-sub">Block known-bad bot User-Agent signatures</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="botEnabled"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Challenge Suspicious Bots</div>
+            <div class="toggle-sub">Return 429 to suspicious (unverified) bot traffic</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="botChallenge"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Verify Good Bots via rDNS</div>
+            <div class="toggle-sub">Confirm Google, Bing etc. via reverse DNS lookup</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="botVerify"><span class="slider"></span></label>
+        </div>
+        <div style="margin-top:1rem">
+          <div class="section-label" style="margin-top:0">Known-Good Bots (bypass bad-bot check)</div>
+          <div class="tag-list" id="botGoodList"></div>
+          <div class="add-inline">
+            <input type="text" id="botGoodInput" placeholder="googlebot">
+            <button class="btn btn-sm btn-primary" onclick="addGoodBot()">Add</button>
+          </div>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveBot()">Save Bot Settings</button>
+          <span class="save-ok" id="botOk">Saved.</span>
+          <span class="save-err" id="botErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Cookie Security -->
+    <div id="tab-cookies" class="tab-panel">
+      <div class="form-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Enforce Secure Flag</div>
+            <div class="toggle-sub">Add Secure attribute to all cookies</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="ckSecure"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">Enforce HttpOnly Flag</div>
+            <div class="toggle-sub">Add HttpOnly attribute to all cookies</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="ckHttpOnly"><span class="slider"></span></label>
+        </div>
+        <div class="form-grid" style="margin-top:1rem">
+          <div class="form-group">
+            <label>Enforce SameSite</label>
+            <select id="ckSameSite">
+              <option value="">— none —</option>
+              <option value="Strict">Strict</option>
+              <option value="Lax">Lax</option>
+              <option value="None">None</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Max Cookie Size (bytes)</label>
+            <input type="number" id="ckMaxSize" min="512" max="65536" value="4096">
+          </div>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveCookies()">Save Cookie Settings</button>
+          <span class="save-ok" id="ckOk">Saved.</span>
+          <span class="save-err" id="ckErr"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab: Rate Limiting -->
+    <div id="tab-ratelimit" class="tab-panel">
+      <div class="form-panel">
+        <p style="margin:0 0 .8rem;font-size:.85rem;color:var(--muted)">Global HTTP rate limiting rules applied to all frontends before per-frontend rules.</p>
+        <table class="rl-table">
+          <thead><tr><th>Name</th><th>Key</th><th>Requests / Window</th><th>Burst</th><th></th></tr></thead>
+          <tbody id="rlRows"></tbody>
+        </table>
+        <div style="margin-top:1.2rem;display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+          <div class="form-group" style="margin:0;flex:2;min-width:120px">
+            <label>Name</label>
+            <input type="text" id="rlName" placeholder="api-limit">
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Key</label>
+            <select id="rlKey" style="min-width:80px">
+              <option value="ip">IP</option>
+              <option value="header">Header</option>
+              <option value="cookie">Cookie</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0;width:6rem">
+            <label>Requests</label>
+            <input type="number" id="rlRequests" value="100" min="1">
+          </div>
+          <div class="form-group" style="margin:0;width:6rem">
+            <label>Window (s)</label>
+            <input type="number" id="rlWindow" value="60" min="1">
+          </div>
+          <div class="form-group" style="margin:0;width:5rem">
+            <label>Burst</label>
+            <input type="number" id="rlBurst" placeholder="—">
+          </div>
+          <button class="btn btn-primary" onclick="addRateLimit()" style="margin-bottom:.05rem">Add Rule</button>
+        </div>
+        <div style="margin-top:.5rem">
+          <span class="save-err" id="rlErr" style="display:none"></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+<script>
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+var _geo = {block_countries:[], allow_countries:[]};
+var _bot = {known_good_bots:[]};
+
+// ── Tab switching ────────────────────────────────────────────────────────────
+function switchTab(name) {
+  var tabs = ['tls','geo','headers','bot','cookies','ratelimit'];
+  document.querySelectorAll('.tab').forEach(function(t, i){ t.classList.toggle('active', tabs[i] === name); });
+  document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ── Load all settings ────────────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    var r = await fetch('/api/security', {headers: authHeaders()});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var d = await r.json();
+
+    // TLS
+    document.getElementById('tlsMinVersion').value = d.tls.min_version || 'tls12';
+    document.getElementById('tlsHstsMaxAge').value = d.tls.hsts_max_age != null ? d.tls.hsts_max_age : 0;
+    document.getElementById('tlsHstsSubs').checked = !!d.tls.hsts_include_subdomains;
+    document.getElementById('tlsOcsp').checked = !!d.tls.ocsp_stapling;
+    document.getElementById('tlsBackendVerify').checked = !!d.tls.backend_tls_verify;
+
+    // GeoIP
+    _geo.block_countries = d.geo.block_countries || [];
+    _geo.allow_countries = d.geo.allow_countries || [];
+    document.getElementById('geoEnabled').checked = !!d.geo.enabled;
+    document.getElementById('geoDb').value = d.geo.database_path || '';
+    renderGeoCodes();
+
+    // Headers
+    document.getElementById('hdrXcto').checked = !!d.headers.add_x_content_type_options;
+    document.getElementById('hdrRmServer').checked = !!d.headers.remove_server_header;
+    document.getElementById('hdrRmXpb').checked = !!d.headers.remove_x_powered_by;
+    document.getElementById('hdrXfo').value = d.headers.add_x_frame_options || '';
+    document.getElementById('hdrReferer').value = d.headers.add_referrer_policy || '';
+    document.getElementById('hdrCsp').value = d.headers.add_content_security_policy || '';
+
+    // Bot
+    document.getElementById('botEnabled').checked = !!d.bot_detection.enabled;
+    document.getElementById('botChallenge').checked = !!d.bot_detection.challenge_suspicious;
+    document.getElementById('botVerify').checked = !!d.bot_detection.verify_good_bots;
+    _bot.known_good_bots = d.bot_detection.known_good_bots || [];
+    renderGoodBots();
+
+    // Cookies
+    document.getElementById('ckSecure').checked = !!d.cookies.enforce_secure_flag;
+    document.getElementById('ckHttpOnly').checked = !!d.cookies.enforce_httponly_flag;
+    document.getElementById('ckSameSite').value = d.cookies.enforce_samesite || '';
+    document.getElementById('ckMaxSize').value = d.cookies.max_cookie_size || 4096;
+
+    // Rate limits
+    renderRateLimits(d.rate_limits || []);
+  } catch(e) {
+    document.getElementById('loadError').textContent = 'Failed to load security settings: ' + e.message;
+    document.getElementById('loadError').style.display = '';
+  }
+}
+
+// ── GeoIP helpers ────────────────────────────────────────────────────────────
+function renderGeoCodes() {
+  document.getElementById('geoBlockList').innerHTML = _geo.block_countries.map(function(c){
+    return '<span class="tag">'+esc(c.toUpperCase())+'<button onclick="removeGeoCode(\'block\',\''+esc(c)+'\')">✕</button></span>';
+  }).join('');
+  document.getElementById('geoAllowList').innerHTML = _geo.allow_countries.map(function(c){
+    return '<span class="tag">'+esc(c.toUpperCase())+'<button onclick="removeGeoCode(\'allow\',\''+esc(c)+'\')">✕</button></span>';
+  }).join('');
+}
+function addGeoCode(type) {
+  var el = document.getElementById('geo' + (type==='block'?'Block':'Allow') + 'Input');
+  var code = el.value.trim().toUpperCase();
+  if (code.length !== 2) { alert('Enter a valid 2-letter ISO country code'); return; }
+  var list = type==='block' ? _geo.block_countries : _geo.allow_countries;
+  if (!list.includes(code)) { list.push(code); renderGeoCodes(); }
+  el.value = '';
+}
+function removeGeoCode(type, code) {
+  if (type==='block') _geo.block_countries = _geo.block_countries.filter(function(c){return c!==code;});
+  else _geo.allow_countries = _geo.allow_countries.filter(function(c){return c!==code;});
+  renderGeoCodes();
+}
+
+// ── Bot helpers ──────────────────────────────────────────────────────────────
+function renderGoodBots() {
+  document.getElementById('botGoodList').innerHTML = _bot.known_good_bots.map(function(b){
+    return '<span class="tag">'+esc(b)+'<button onclick="removeGoodBot(\''+esc(b)+'\')">✕</button></span>';
+  }).join('');
+}
+function addGoodBot() {
+  var val = document.getElementById('botGoodInput').value.trim().toLowerCase();
+  if (!val) return;
+  if (!_bot.known_good_bots.includes(val)) { _bot.known_good_bots.push(val); renderGoodBots(); }
+  document.getElementById('botGoodInput').value = '';
+}
+function removeGoodBot(bot) {
+  _bot.known_good_bots = _bot.known_good_bots.filter(function(b){return b!==bot;});
+  renderGoodBots();
+}
+
+// ── Rate limit helpers ───────────────────────────────────────────────────────
+function renderRateLimits(rules) {
+  var tbody = document.getElementById('rlRows');
+  if (!rules.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);font-style:italic">No rules configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rules.map(function(r){
+    return '<tr><td><strong>'+esc(r.name)+'</strong></td><td>'+esc(r.key)+'</td><td>'+esc(r.requests)+' / '+esc(r.window_secs)+'s</td><td>'+(r.burst!=null?esc(r.burst):'—')+'</td>'+
+      '<td style="text-align:right"><button class="btn btn-sm btn-danger" onclick="deleteRateLimit(\''+esc(r.name)+'\')">Delete</button></td></tr>';
+  }).join('');
+}
+
+async function addRateLimit() {
+  var name = document.getElementById('rlName').value.trim();
+  var errEl = document.getElementById('rlErr');
+  if (!name) { errEl.textContent='Name required'; errEl.style.display=''; return; }
+  var req = parseInt(document.getElementById('rlRequests').value)||100;
+  var win = parseInt(document.getElementById('rlWindow').value)||60;
+  var burst = document.getElementById('rlBurst').value.trim();
+  var body = {name:name, key:document.getElementById('rlKey').value, requests:req, window_secs:win};
+  if (burst) body.burst = parseInt(burst);
+  try {
+    var r = await fetch('/api/security/rate-limits', {method:'POST', headers:authHeaders(), body:JSON.stringify(body)});
+    var res = await r.json();
+    if (!r.ok){errEl.textContent=res.error||'Failed';errEl.style.display='';return;}
+    errEl.style.display='none';
+    document.getElementById('rlName').value='';
+    document.getElementById('rlBurst').value='';
+    loadSettings();
+  } catch(e){errEl.textContent='Request failed';errEl.style.display='';}
+}
+
+async function deleteRateLimit(name) {
+  if (!confirm('Delete rate limit rule "'+name+'"?')) return;
+  try {
+    var r = await fetch('/api/security/rate-limits/' + encodeURIComponent(name), {method:'DELETE', headers:authHeaders()});
+    if (!r.ok){var d=await r.json();alert(d.error||'Failed');return;}
+    loadSettings();
+  } catch(e){alert('Request failed');}
+}
+
+// ── Save functions ───────────────────────────────────────────────────────────
+function flash(okId, errId, ok, msg) {
+  var o = document.getElementById(okId), e = document.getElementById(errId);
+  if (ok) { o.style.display=''; e.style.display='none'; setTimeout(function(){o.style.display='none';},2500); }
+  else { e.textContent=msg||'Save failed'; e.style.display=''; o.style.display='none'; }
+}
+
+async function saveTls() {
+  var hsts = parseInt(document.getElementById('tlsHstsMaxAge').value)||0;
+  var body = {
+    min_version: document.getElementById('tlsMinVersion').value,
+    ocsp_stapling: document.getElementById('tlsOcsp').checked,
+    hsts_max_age: hsts > 0 ? hsts : null,
+    hsts_include_subdomains: document.getElementById('tlsHstsSubs').checked,
+    backend_tls_verify: document.getElementById('tlsBackendVerify').checked,
+  };
+  try {
+    var r = await fetch('/api/security/tls', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
+    var d = await r.json();
+    flash('tlsOk','tlsErr', r.ok, d.error);
+  } catch(e){flash('tlsOk','tlsErr',false,'Request failed');}
+}
+
+async function saveGeo() {
+  var dbVal = document.getElementById('geoDb').value.trim();
+  var body = {
+    enabled: document.getElementById('geoEnabled').checked,
+    database_path: dbVal ? dbVal : null,
+    block_countries: _geo.block_countries,
+    allow_countries: _geo.allow_countries,
+  };
+  try {
+    var r = await fetch('/api/security/geo', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
+    var d = await r.json();
+    flash('geoOk','geoErr', r.ok, d.error);
+  } catch(e){flash('geoOk','geoErr',false,'Request failed');}
+}
+
+async function saveHeaders() {
+  var xfo = document.getElementById('hdrXfo').value;
+  var ref = document.getElementById('hdrReferer').value;
+  var csp = document.getElementById('hdrCsp').value.trim();
+  var body = {
+    add_x_content_type_options: document.getElementById('hdrXcto').checked,
+    remove_server_header: document.getElementById('hdrRmServer').checked,
+    remove_x_powered_by: document.getElementById('hdrRmXpb').checked,
+    add_x_frame_options: xfo || null,
+    add_referrer_policy: ref || null,
+    add_content_security_policy: csp || null,
+  };
+  try {
+    var r = await fetch('/api/security/headers', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
+    var d = await r.json();
+    flash('hdrOk','hdrErr', r.ok, d.error);
+  } catch(e){flash('hdrOk','hdrErr',false,'Request failed');}
+}
+
+async function saveBot() {
+  var body = {
+    enabled: document.getElementById('botEnabled').checked,
+    challenge_suspicious: document.getElementById('botChallenge').checked,
+    verify_good_bots: document.getElementById('botVerify').checked,
+    known_good_bots: _bot.known_good_bots,
+  };
+  try {
+    var r = await fetch('/api/security/bot', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
+    var d = await r.json();
+    flash('botOk','botErr', r.ok, d.error);
+  } catch(e){flash('botOk','botErr',false,'Request failed');}
+}
+
+async function saveCookies() {
+  var ss = document.getElementById('ckSameSite').value;
+  var body = {
+    enforce_secure_flag: document.getElementById('ckSecure').checked,
+    enforce_httponly_flag: document.getElementById('ckHttpOnly').checked,
+    enforce_samesite: ss || null,
+    max_cookie_size: parseInt(document.getElementById('ckMaxSize').value)||4096,
+  };
+  try {
+    var r = await fetch('/api/security/cookies', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
+    var d = await r.json();
+    flash('ckOk','ckErr', r.ok, d.error);
+  } catch(e){flash('ckOk','ckErr',false,'Request failed');}
+}
+
+initPage('security');
+loadSettings();
+</script>
+</body>
+</html>

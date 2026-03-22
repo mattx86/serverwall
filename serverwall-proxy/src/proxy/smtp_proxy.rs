@@ -9,7 +9,7 @@ use serverwall_core::logging::PostfixLogEntry;
 use serverwall_core::proto::smtp::{self, SmtpCommand};
 
 use serverwall_antispam::headers::SpamHeaderBuilder;
-use serverwall_antispam::lists::{Blocklist, Whitelist};
+use serverwall_antispam::lists::{AllowList, BlockList};
 use serverwall_antispam::pipeline::{
     AntispamPipeline, EnvelopeContext, MessageContext, PipelineDecision,
 };
@@ -48,9 +48,11 @@ pub struct SmtpProxy {
     pub backend_tag: String,
     pub state: SmtpState,
     pipeline: Arc<AntispamPipeline>,
-    whitelist: Arc<Whitelist>,
-    blocklist: Arc<Blocklist>,
+    allow_list: Arc<AllowList>,
+    block_list: Arc<BlockList>,
     hostname: String,
+    /// JA3 TLS fingerprint for this connection (None for plaintext SMTP).
+    ja3_fingerprint: Option<String>,
 }
 
 impl SmtpProxy {
@@ -58,18 +60,20 @@ impl SmtpProxy {
         backend_addr: SocketAddr,
         backend_tag: String,
         pipeline: Arc<AntispamPipeline>,
-        whitelist: Arc<Whitelist>,
-        blocklist: Arc<Blocklist>,
+        allow_list: Arc<AllowList>,
+        block_list: Arc<BlockList>,
         hostname: String,
+        ja3_fingerprint: Option<String>,
     ) -> Self {
         Self {
             backend_addr,
             backend_tag,
             state: SmtpState::Connected,
             pipeline,
-            whitelist,
-            blocklist,
+            allow_list,
+            block_list,
             hostname,
+            ja3_fingerprint,
         }
     }
 
@@ -121,7 +125,7 @@ impl SmtpProxy {
 
         // ---- Phase 2: SMTP command loop ----
         let mut data_buffer: Vec<u8> = Vec::new();
-        let mut whitelisted = false;
+        let mut allowed = false;
 
         loop {
             let mut line = String::new();
@@ -167,9 +171,9 @@ impl SmtpProxy {
                 SmtpCommand::MailFrom(sender) => {
                     mail_from = sender.trim_matches(|c| c == '<' || c == '>').to_string();
 
-                    // Blocklist check.
-                    if self.blocklist.matches(peer_addr.ip(), &mail_from) {
-                        let resp = "550 5.7.1 Sender blocklisted\r\n";
+                    // Block list check.
+                    if self.block_list.matches(peer_addr.ip(), &mail_from) {
+                        let resp = "550 5.7.1 Sender blocked\r\n";
                         let writer = client_reader.get_mut();
                         writer.write_all(resp.as_bytes()).await?;
                         writer.flush().await?;
@@ -188,11 +192,22 @@ impl SmtpProxy {
 
                 SmtpCommand::RcptTo(recipient) => {
                     let addr = recipient.trim_matches(|c| c == '<' || c == '>').to_string();
+
+                    // Recipient block list check.
+                    if self.block_list.contains_recipient(&addr) {
+                        let resp = "550 5.7.1 Recipient blocked\r\n";
+                        let writer = client_reader.get_mut();
+                        writer.write_all(resp.as_bytes()).await?;
+                        writer.flush().await?;
+                        bytes_from_backend += resp.len() as u64;
+                        continue;
+                    }
+
                     rcpt_to.push(addr);
 
-                    // Whitelist bypass check.
-                    if self.whitelist.matches(peer_addr.ip(), &mail_from) {
-                        whitelisted = true;
+                    // Allow list bypass check.
+                    if self.allow_list.matches(peer_addr.ip(), &mail_from) {
+                        allowed = true;
                     }
 
                     self.state = SmtpState::RcptTo;
@@ -251,6 +266,7 @@ impl SmtpProxy {
                         banner_sent_time,
                         command_count,
                         pipelining_detected,
+                        ja3_fingerprint: self.ja3_fingerprint.clone(),
                     };
 
                     // Run pre-DATA checks.
@@ -294,8 +310,8 @@ impl SmtpProxy {
                         continue;
                     }
 
-                    // If whitelisted, skip post-DATA checks.
-                    if whitelisted {
+                    // If in allow list, skip post-DATA checks.
+                    if allowed {
                         let report = serverwall_antispam::result::SpamReport {
                             score: SpamScore::new(),
                             verdict: SpamVerdict::Clean,
@@ -342,6 +358,7 @@ impl SmtpProxy {
                             banner_sent_time,
                             command_count,
                             pipelining_detected,
+                            ja3_fingerprint: self.ja3_fingerprint.clone(),
                         },
                         raw_message: data_buffer.clone(),
                     };
@@ -440,7 +457,7 @@ impl SmtpProxy {
                     mail_from.clear();
                     rcpt_to.clear();
                     data_buffer.clear();
-                    whitelisted = false;
+                    allowed = false;
                     self.state = SmtpState::HeloReceived;
                 }
 
@@ -448,7 +465,7 @@ impl SmtpProxy {
                     mail_from.clear();
                     rcpt_to.clear();
                     data_buffer.clear();
-                    whitelisted = false;
+                    allowed = false;
                     if self.state != SmtpState::BannerSent && self.state != SmtpState::Connected {
                         self.state = SmtpState::HeloReceived;
                     }

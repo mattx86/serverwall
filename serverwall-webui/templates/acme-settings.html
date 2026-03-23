@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - ACME Settings</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}ACME Settings{% endblock %}
+{% block head_extra %}
 <style>
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
 .toggle-row:last-of-type{border-bottom:none}
@@ -14,15 +10,8 @@
 .save-ok{color:var(--success,#4ade80);font-size:.82rem;display:none}
 .save-err{color:var(--danger,#f87171);font-size:.82rem;display:none}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar">
       <h2 style="margin:0;flex:1">ACME / Let's Encrypt Settings</h2>
     </div>
@@ -80,10 +69,8 @@
         <span class="save-err" id="saveErr"></span>
       </div>
     </div>
-
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function setSelect(id, val) {
   var el = document.getElementById(id);
@@ -141,5 +128,4 @@ async function save() {
 initPage('acme-settings');
 load();
 </script>
-</body>
-</html>
+{% endblock %}

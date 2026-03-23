@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Path, State},
@@ -194,6 +195,41 @@ pub async fn add_server(
         }
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))),
     }
+}
+
+/// GET /api/backends/:pool/health — TCP probe each member and report reachability
+pub async fn probe_health(
+    State(state): State<AppState>,
+    Path(pool_name): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    let config = state.config.load();
+    let pool = match config.backend_pool.iter().find(|p| p.name == pool_name) {
+        Some(p) => p.clone(),
+        None => return (StatusCode::NOT_FOUND, Json(json!({"error": "pool not found"}))),
+    };
+
+    let mut results = serde_json::Map::new();
+    for backend in &pool.backend {
+        let addr = backend.address.clone();
+        let start = Instant::now();
+        let reachable = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::net::TcpStream::connect(&addr),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false);
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        let latency = if reachable { Some(latency_ms) } else { None };
+        results.insert(backend.name.clone(), json!({
+            "reachable": reachable,
+            "latency_ms": latency,
+            "enabled": backend.enabled,
+        }));
+    }
+
+    (StatusCode::OK, Json(json!({"pool": pool_name, "backends": results})))
 }
 
 /// DELETE /api/backends/:pool/servers/:name — remove an individual backend server by name

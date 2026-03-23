@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ServerWall - {% block title %}{% endblock %}</title>
+<link rel="stylesheet" href="/ui/app.css">
+{% block head_extra %}{% endblock %}
+</head>
+<body>
+<div id="topbar">
+  <span class="brand">ServerWall</span>
+  <button id="logoutBtn">Logout</button>
+</div>
+<div id="layout">
+  <div id="sidebar"></div>
+  <div id="main">
+{% block content %}{% endblock %}
+  </div>
+</div>
+<script src="/ui/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

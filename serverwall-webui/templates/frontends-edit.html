@@ -1,19 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Edit Frontend</title>
-<link rel="stylesheet" href="/ui/app.css">
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% extends "base.html" %}
+{% block title %}Edit Frontend{% endblock %}
+{% block content %}
     <div class="toolbar" style="margin-bottom:1rem">
       <h2 style="margin:0;flex:1">Edit Frontend: <span id="feTitle" style="color:var(--muted);font-weight:400"></span></h2>
       <a href="/ui/frontends.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
@@ -137,9 +124,8 @@
         <a href="/ui/frontends.html" class="btn btn-secondary">Cancel</a>
       </div>
     </div>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 var feName = '';
 var _certMap = {};
@@ -409,5 +395,4 @@ async function saveFrontend() {
 initPage('frontends');
 loadFrontend();
 </script>
-</body>
-</html>
+{% endblock %}

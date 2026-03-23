@@ -441,7 +441,7 @@ pub struct CookieSecurityConfig {
     pub max_cookie_size: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityHeadersConfig {
     #[serde(default)]
     pub add_x_content_type_options: bool,
@@ -455,6 +455,19 @@ pub struct SecurityHeadersConfig {
     pub remove_server_header: bool,
     #[serde(default = "default_true")]
     pub remove_x_powered_by: bool,
+}
+
+impl Default for SecurityHeadersConfig {
+    fn default() -> Self {
+        Self {
+            add_x_content_type_options: false,
+            add_x_frame_options: None,
+            add_referrer_policy: None,
+            add_content_security_policy: None,
+            remove_server_header: true,
+            remove_x_powered_by: true,
+        }
+    }
 }
 
 /// A named bundle of per-frontend security overrides.

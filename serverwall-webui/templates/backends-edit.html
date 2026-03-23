@@ -1,24 +1,16 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Edit Backend Pool</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Edit Backend Pool{% endblock %}
+{% block head_extra %}
 <style>
-.member-row{display:grid;grid-template-columns:2fr 1.5fr 0.7fr auto auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
+.member-row{display:grid;grid-template-columns:1rem 2fr 1.5fr 0.7fr auto auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
 .member-row input,.member-row select{padding:.35rem .5rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:.85rem}
-.member-header{display:grid;grid-template-columns:2fr 1.5fr 0.7fr auto auto auto;gap:.5rem;margin-bottom:.3rem;font-size:.75rem;color:var(--muted)}
+.member-header{display:grid;grid-template-columns:1rem 2fr 1.5fr 0.7fr auto auto auto;gap:.5rem;margin-bottom:.3rem;font-size:.75rem;color:var(--muted)}
+.status-dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:var(--muted);cursor:default;flex-shrink:0}
+.status-dot.ok{background:#22c55e}
+.status-dot.err{background:#ef4444}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar" style="margin-bottom:1rem">
       <h2 style="margin:0;flex:1">Edit Pool: <span id="poolTitle" style="color:var(--muted);font-weight:400"></span></h2>
       <a href="/ui/backends.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
@@ -69,7 +61,7 @@
           <button type="button" class="btn btn-secondary btn-sm" onclick="addMemberRow()">+ Add Member</button>
         </div>
         <div class="member-header">
-          <span>Address *</span><span>Name</span><span>Weight</span><span>TLS</span><span>Enabled</span><span></span>
+          <span></span><span>Address *</span><span>Name</span><span>Weight</span><span>TLS</span><span>Enabled</span><span></span>
         </div>
         <div id="memberRows"></div>
       </div>
@@ -80,10 +72,8 @@
         <a href="/ui/backends.html" class="btn btn-secondary">Cancel</a>
       </div>
     </div>
-
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 var poolName = '';
 var memberCount = 0;
@@ -122,6 +112,7 @@ async function loadPool() {
     if (!memberCount) addMemberRow();
 
     document.getElementById('editPanel').style.display = '';
+    probeHealth();
   } catch(e) {
     showError('Request failed: ' + e.message);
   }
@@ -139,6 +130,7 @@ function addMemberRow(b) {
   row.className = 'member-row';
   row.id = 'member-' + i;
   row.innerHTML =
+    '<span class="status-dot" id="mdot-'+i+'" title="' + (addr ? 'Checking...' : '') + '"></span>' +
     '<input type="text" id="mAddr'+i+'" placeholder="host:port" value="'+escAttr(addr)+'">' +
     '<input type="text" id="mName'+i+'" placeholder="(optional)" value="'+escAttr(name)+'">' +
     '<input type="number" id="mWeight'+i+'" value="'+weight+'" min="1">' +
@@ -204,6 +196,29 @@ async function savePool() {
   }
 }
 
+async function probeHealth() {
+  try {
+    var r = await fetch('/api/backends/'+encodeURIComponent(poolName)+'/health', {headers: authHeaders()});
+    if (!r.ok) return;
+    var results = (await r.json()).backends || {};
+    document.querySelectorAll('[id^="member-"]').forEach(function(row) {
+      var i = row.id.replace('member-', '');
+      var dot = document.getElementById('mdot-' + i);
+      var nameEl = document.getElementById('mName' + i);
+      if (!dot || !nameEl) return;
+      var info = results[nameEl.value.trim()];
+      if (!info) return;
+      if (info.reachable) {
+        dot.className = 'status-dot ok';
+        dot.title = 'Reachable \xb7 ' + info.latency_ms + 'ms';
+      } else {
+        dot.className = 'status-dot err';
+        dot.title = 'Unreachable';
+      }
+    });
+  } catch(e) {}
+}
+
 function showError(msg) {
   var el = document.getElementById('loadError');
   el.textContent = msg;
@@ -223,5 +238,4 @@ function escAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;'
 initPage('backends');
 loadPool();
 </script>
-</body>
-</html>
+{% endblock %}

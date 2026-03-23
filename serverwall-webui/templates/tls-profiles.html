@@ -1,25 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - TLS Profiles</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}TLS Profiles{% endblock %}
+{% block head_extra %}
 <style>
 .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
 .toggle-row:last-of-type{border-bottom:none}
 .toggle-label{font-size:.88rem}
 .toggle-sub{font-size:.75rem;color:var(--muted);margin-top:.15rem}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
 
     <div class="toolbar" id="tpToolbar">
       <h2 style="margin:0;flex:1">TLS Profiles</h2>
@@ -89,9 +78,8 @@
       </tbody>
     </table>
 
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
@@ -229,5 +217,4 @@ async function deleteProfile(name) {
 initPage('tls-profiles');
 loadProfiles();
 </script>
-</body>
-</html>
+{% endblock %}

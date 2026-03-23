@@ -1,19 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall Dashboard</title>
-<link rel="stylesheet" href="/ui/app.css">
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
     <h2>Dashboard</h2>
     <div class="cards" id="statusCards">
       <div class="card"><h3>Status</h3><div class="value" id="sysStatus">--</div></div>
@@ -23,9 +10,8 @@
       <div class="card"><h3>Active Connections</h3><div class="value" id="connCount">--</div></div>
       <div class="card" id="cardQueue" style="display:none"><h3>Mail Queue</h3><div class="value" id="queueSize">--</div></div>
     </div>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 async function loadDashboard() {
   try {
@@ -45,5 +31,4 @@ initPage('dashboard');
 loadDashboard();
 setInterval(loadDashboard, 15000);
 </script>
-</body>
-</html>
+{% endblock %}

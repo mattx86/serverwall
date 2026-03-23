@@ -176,9 +176,15 @@ impl ResolvesServerCert for CertStore {
         &self,
         client_hello: rustls::server::ClientHello<'_>,
     ) -> Option<Arc<CertifiedKey>> {
-        let sni = client_hello.server_name()?;
-        debug!(sni = %sni, "resolving certificate for SNI");
-        CertStore::resolve(self, sni)
+        if let Some(sni) = client_hello.server_name() {
+            debug!(sni = %sni, "resolving certificate for SNI");
+            CertStore::resolve(self, sni)
+        } else {
+            // No SNI (e.g. client connecting by IP address) — use the default cert.
+            debug!("no SNI in ClientHello; using default certificate");
+            let lock = self.default_key.read().expect("default_key lock poisoned");
+            lock.clone()
+        }
     }
 }
 

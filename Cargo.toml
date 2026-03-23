@@ -86,6 +86,9 @@ notify = "=7.0.0"
 # Embedded assets
 rust-embed = "=8.11.0"
 
+# Templating
+askama = "=0.12.1"
+
 # DNS
 hickory-resolver = "=0.24.4"
 

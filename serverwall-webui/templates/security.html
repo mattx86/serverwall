@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Security Settings</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Security Settings{% endblock %}
+{% block head_extra %}
 <style>
 .tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1.2rem}
 .tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
@@ -27,15 +23,8 @@
 .save-ok{color:var(--success,#4ade80);font-size:.82rem;display:none}
 .save-err{color:var(--danger,#f87171);font-size:.82rem;display:none}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar">
       <h2 style="margin:0;flex:1">Security Settings</h2>
     </div>
@@ -324,10 +313,8 @@
         </div>
       </div>
     </div>
-
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
@@ -571,5 +558,4 @@ async function saveCookies() {
 initPage('security');
 loadSettings();
 </script>
-</body>
-</html>
+{% endblock %}

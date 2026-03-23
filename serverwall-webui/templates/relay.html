@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Relay</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Relay{% endblock %}
+{% block head_extra %}
 <style>
 .tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1.2rem}
 .tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
@@ -27,15 +23,8 @@
 .dkim-table th{text-align:left;padding:.3rem .5rem;font-size:.75rem;color:var(--muted);font-weight:500}
 .dkim-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar">
       <h2 style="margin:0;flex:1">Relay</h2>
     </div>
@@ -194,10 +183,8 @@
         </table>
       </div>
     </div>
-
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 var _relay = null;
@@ -358,5 +345,4 @@ async function saveRelayConfig(){
 initPage('relay');
 loadRelay();
 </script>
-</body>
-</html>
+{% endblock %}

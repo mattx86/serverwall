@@ -80,6 +80,7 @@ pub fn build_router(state: AppState) -> Router {
             "/api/backends/{pool}",
             get(backends::get).put(backends::update).delete(backends::delete),
         )
+        .route("/api/backends/{pool}/health", get(backends::probe_health))
         .route("/api/backends/{pool}/servers", post(backends::add_server))
         .route("/api/backends/{pool}/servers/{name}", axum::routing::delete(backends::remove_server))
         // Queue (full CRUD)

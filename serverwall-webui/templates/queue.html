@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Mail Queue</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Mail Queue{% endblock %}
+{% block head_extra %}
 <style>
 #msgDetail{display:none;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:1.2rem;margin-bottom:1rem}
 #msgDetail h3{color:var(--accent);margin-bottom:.8rem}
@@ -13,15 +9,8 @@
 #msgDetail .close:hover{color:var(--danger)}
 .cards{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <h2 style="margin-bottom:1rem">Mail Queue</h2>
 
     <div class="cards" id="qStats">
@@ -84,9 +73,8 @@
       <span id="pageInfo">Page 1</span>
       <button id="nextBtn" onclick="nextPage()">Next &raquo;</button>
     </div>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 var currentPage=0,pageSize=50,totalMessages=0,currentDetailId=null,allMessages=[];
 
@@ -183,5 +171,4 @@ initPage('queue');
 loadStats();loadQueue();
 setInterval(function(){loadStats();loadQueue()},30000);
 </script>
-</body>
-</html>
+{% endblock %}

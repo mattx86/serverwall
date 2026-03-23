@@ -1,6 +1,7 @@
 mod state;
 mod middleware;
 mod static_files;
+mod templates;
 mod tls;
 mod routes;
 

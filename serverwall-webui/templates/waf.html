@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - WAF Rulesets</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}WAF Rulesets{% endblock %}
+{% block head_extra %}
 <style>
 .section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:.8rem 0 .3rem}
 .rule-grid{display:grid;grid-template-columns:1fr 9rem 5rem 8rem 7rem 1fr auto;gap:.35rem;align-items:center;margin-bottom:.3rem}
@@ -17,15 +13,8 @@
 .add-row{display:flex;gap:.4rem;margin-top:.25rem}
 .add-row input{flex:1}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
 
     <!-- Toolbar -->
     <div class="toolbar" id="wafToolbar">
@@ -147,9 +136,8 @@
       </tbody>
     </table>
 
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function escAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
@@ -415,5 +403,4 @@ async function deleteRuleset(name) {
 initPage('waf');
 loadWaf();
 </script>
-</body>
-</html>
+{% endblock %}

@@ -1,19 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Frontends</title>
-<link rel="stylesheet" href="/ui/app.css">
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% extends "base.html" %}
+{% block title %}Frontends{% endblock %}
+{% block content %}
     <div class="toolbar" id="feToolbar">
       <h2 style="margin:0;flex:1">Frontends</h2>
       <button class="btn btn-primary" id="addBtn" onclick="showAddForm()">+ Add Frontend</button>
@@ -129,9 +116,8 @@
         <tr><td colspan="7">Loading...</td></tr>
       </tbody>
     </table>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 var _certMap = {};
 
@@ -385,5 +371,4 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 initPage('frontends');
 loadFrontends();
 </script>
-</body>
-</html>
+{% endblock %}

@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Backends</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Backends{% endblock %}
+{% block head_extra %}
 <style>
 .pool-header{background:var(--surface2);padding:.5rem .8rem;display:flex;align-items:center;gap:.7rem;border-radius:4px 4px 0 0;border:1px solid var(--border)}
 .pool-header strong{flex:1;font-size:.95rem}
@@ -13,16 +9,13 @@
 .member-row{display:grid;grid-template-columns:2fr 1.5fr 0.7fr auto auto auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
 .member-row input,.member-row select{padding:.35rem .5rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:.85rem}
 .member-row label{font-size:.82rem;color:var(--muted)}
+.status-dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;background:var(--muted);vertical-align:middle;margin-right:.3rem;cursor:default;flex-shrink:0}
+.status-dot.ok{background:#22c55e}
+.status-dot.err{background:#ef4444}
+.backend-badge{display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:3px;padding:.1rem .35rem;font-size:.78rem;margin:.1rem .15rem .1rem 0;white-space:nowrap}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar" id="poolToolbar">
       <h2 style="margin:0;flex:1">Backend Pools</h2>
       <button class="btn btn-primary" id="addPoolBtn" onclick="showPoolForm()">+ Add Pool</button>
@@ -39,10 +32,10 @@
         <div class="form-group">
           <label>Health Check Type</label>
           <select id="pHcType">
-            <option value="tcp">TCP</option>
             <option value="http">HTTP</option>
             <option value="smtp">SMTP</option>
             <option value="imap">IMAP</option>
+            <option value="tcp">TCP</option>
           </select>
         </div>
         <div class="form-group">
@@ -87,15 +80,14 @@
 
     <table id="poolTable">
       <thead>
-        <tr><th>Name</th><th>Health Check</th><th>Interval</th><th>Backends</th><th>Actions</th></tr>
+        <tr><th>Name</th><th>Health Check</th><th>Interval</th><th>Members</th><th>Actions</th></tr>
       </thead>
       <tbody id="poolBody">
         <tr><td colspan="5">Loading...</td></tr>
       </tbody>
     </table>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 var memberCount = 0;
 
@@ -145,12 +137,18 @@ async function loadPools() {
       rows = '<tr><td colspan="5" class="empty-state">No backend pools configured</td></tr>';
     } else {
       pools.forEach(function(p) {
-        var count = (p.backends || []).length;
+        var members = p.backends || [];
+        var membersHtml = members.map(function(b) {
+          return '<span class="backend-badge" id="badge-'+esc(p.name)+'-'+esc(b.name)+'">' +
+            '<span class="status-dot" id="dot-'+esc(p.name)+'-'+esc(b.name)+'" title="Checking..."></span>' +
+            esc(b.address) + '</span>';
+        }).join('') || '<span style="color:var(--muted);font-size:.82rem">none</span>';
+
         rows += '<tr>';
         rows += '<td><strong>'+esc(p.name)+'</strong></td>';
         rows += '<td>'+esc(p.health_check_type)+'</td>';
         rows += '<td>'+esc(p.health_check_interval||'10s')+'</td>';
-        rows += '<td>'+count+'</td>';
+        rows += '<td>'+membersHtml+'</td>';
         rows += '<td>';
         rows += '<a class="btn btn-secondary btn-sm" href="/ui/backends-edit.html?pool='+encodeURIComponent(p.name)+'">Edit</a> ';
         rows += '<button class="btn btn-danger btn-sm" onclick="deletePool(\''+esc(p.name)+'\')">Delete</button>';
@@ -159,9 +157,39 @@ async function loadPools() {
       });
     }
     document.getElementById('poolBody').innerHTML = rows;
+
+    // Probe health for each pool asynchronously
+    pools.forEach(function(p) {
+      probePool(p.name, p.backends || []);
+    });
   } catch(e) {
     document.getElementById('poolBody').innerHTML = '<tr><td colspan="5" style="color:var(--danger)">Error loading backends</td></tr>';
   }
+}
+
+async function probePool(poolName, members) {
+  try {
+    var r = await fetch('/api/backends/'+encodeURIComponent(poolName)+'/health', {headers: authHeaders()});
+    if (!r.ok) return;
+    var d = await r.json();
+    var results = d.backends || {};
+    members.forEach(function(b) {
+      var dot = document.getElementById('dot-'+poolName+'-'+b.name);
+      if (!dot) return;
+      var info = results[b.name];
+      if (!info) return;
+      if (!b.enabled) {
+        dot.className = 'status-dot';
+        dot.title = 'Disabled';
+      } else if (info.reachable) {
+        dot.className = 'status-dot ok';
+        dot.title = 'Reachable · ' + info.latency_ms + 'ms';
+      } else {
+        dot.className = 'status-dot err';
+        dot.title = 'Unreachable';
+      }
+    });
+  } catch(e) {}
 }
 
 async function submitPool() {
@@ -223,5 +251,4 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 initPage('backends');
 loadPools();
 </script>
-</body>
-</html>
+{% endblock %}

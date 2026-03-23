@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - IP ACL</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}IP ACL{% endblock %}
+{% block head_extra %}
 <style>
 .acl-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
 .list-table{width:100%;border-collapse:collapse;font-size:.85rem}
@@ -15,15 +11,8 @@
 .add-row input{flex:1}
 .note{font-size:.8rem;color:var(--muted);margin-top:1rem;padding:.5rem .8rem;background:rgba(255,255,255,.03);border-left:3px solid var(--border);border-radius:0 4px 4px 0}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar">
       <h2 style="margin:0;flex:1">Global IP ACL</h2>
     </div>
@@ -70,9 +59,8 @@
       <div class="section-label" style="margin-top:0">Per-Frontend ACL (read-only)</div>
       <div id="frontendAcls" style="font-size:.85rem;color:var(--muted)">Loading…</div>
     </div>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
@@ -149,5 +137,4 @@ async function removeIp(listType, ip) {
 initPage('acl');
 loadAcl();
 </script>
-</body>
-</html>
+{% endblock %}

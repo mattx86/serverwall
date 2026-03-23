@@ -489,8 +489,8 @@ async fn handle_request(
             continue;
         }
 
-        // Conditionally strip server identification headers
-        if lower == "server" && security_headers.remove_server_header {
+        // Strip server identification headers; we add our own Server header below.
+        if lower == "server" {
             continue;
         }
         if lower == "x-powered-by" && security_headers.remove_x_powered_by {

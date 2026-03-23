@@ -11,7 +11,8 @@ services:
     depends_on:
       - nginx
     ports:
-      - "80:80"       # ServerWall frontend (proxy to nginx)
+      - "80:80"       # ServerWall frontend (plain TCP / HTTP)
+      - "443:443"     # ServerWall frontend (TLS TCP / HTTPS)
       - "8443:8443"   # ServerWall WebUI
     volumes:
       # Mount only persistent data dirs — never /opt/serverwall/bin so that

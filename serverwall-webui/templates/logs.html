@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Logs</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Logs{% endblock %}
+{% block head_extra %}
 <style>
 #logOutput{
   background:#0d0d0d;
@@ -29,15 +25,8 @@
 .status-dot.disconnected{background:#f38ba8}
 .status-dot.idle{background:#6c7086}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar">
       <h2 style="margin:0;flex:1">Logs</h2>
     </div>
@@ -60,9 +49,8 @@
       </div>
       <div id="logOutput"><span style="color:#6c7086">Select a frontend above to start streaming logs.</span></div>
     </div>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 var evtSource = null;
 var paused = false;
@@ -181,5 +169,4 @@ function setStatus(state, text) {
 initPage('logs');
 loadFrontends();
 </script>
-</body>
-</html>
+{% endblock %}

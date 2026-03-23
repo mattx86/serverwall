@@ -1,19 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Generate Certificate</title>
-<link rel="stylesheet" href="/ui/app.css">
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% extends "base.html" %}
+{% block title %}Generate Certificate{% endblock %}
+{% block content %}
     <div class="toolbar" style="margin-bottom:1rem">
       <h2 style="margin:0;flex:1">Generate Self-Signed Certificate</h2>
       <a href="/ui/certificates.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
@@ -39,9 +26,8 @@
         <button class="btn btn-secondary" onclick="regenerateWebUI()" title="Regenerate the WebUI certificate with all server IPs">Regenerate WebUI Cert</button>
       </div>
     </div>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 async function generateSelfSigned() {
   var name    = document.getElementById('ssName').value.trim();
@@ -83,5 +69,4 @@ async function regenerateWebUI() {
 
 initPage('certs-generate');
 </script>
-</body>
-</html>
+{% endblock %}

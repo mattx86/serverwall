@@ -7,6 +7,7 @@ use rust_embed::Embed;
 
 use crate::middleware;
 use crate::state::AppState;
+use crate::templates::render_page;
 
 #[derive(Embed)]
 #[folder = "../web-ui/"]
@@ -53,11 +54,16 @@ fn has_valid_session(headers: &axum::http::HeaderMap, state: &AppState) -> bool 
 }
 
 async fn serve_embedded_file(path: &str) -> Response {
+    if path.ends_with(".html") {
+        return match render_page(path) {
+            Some(html) => Html(html).into_response(),
+            None => (StatusCode::NOT_FOUND, Html("Not found".to_string())).into_response(),
+        };
+    }
+
     match WebUiAssets::get(path) {
         Some(file) => {
-            let mime = if path.ends_with(".html") {
-                "text/html; charset=utf-8"
-            } else if path.ends_with(".css") {
+            let mime = if path.ends_with(".css") {
                 "text/css"
             } else if path.ends_with(".js") {
                 "application/javascript"

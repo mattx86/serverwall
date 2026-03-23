@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - View Certificate</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}View Certificate{% endblock %}
+{% block head_extra %}
 <style>
 .cert-table td:first-child{width:9rem;color:var(--muted);font-size:.82rem;white-space:nowrap;vertical-align:top;padding-top:.35rem}
 .chain-entry{padding:.5rem .7rem;border-left:2px solid var(--border);margin-left:1rem;margin-bottom:.35rem;background:rgba(255,255,255,.03);border-radius:0 4px 4px 0;font-size:.85rem}
@@ -17,15 +13,8 @@
 .badge-blue{background:rgba(100,149,237,.18);color:#89b4fa}
 .section-label{font-size:.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.5rem}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar" style="margin-bottom:1rem">
       <h2 style="margin:0;flex:1">Certificate: <span id="certName" style="color:var(--muted);font-weight:400"></span></h2>
       <a href="/ui/certificates.html" class="btn btn-secondary btn-sm">&#8592; Back</a>
@@ -50,9 +39,8 @@
         <tbody id="detailBody"></tbody>
       </table>
     </div>
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
@@ -157,5 +145,4 @@ function renderDetails(d) {
 initPage('certs');
 loadCert();
 </script>
-</body>
-</html>
+{% endblock %}

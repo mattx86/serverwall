@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::config::loader::load_config;
+use crate::config::loader::{load_config, validate_config};
 use crate::config::schema::{
     AcmeConfig, AntispamConfig, BackendConfig, BackendPoolConfig, BotDetectionConfig,
     CookieSecurityConfig, DkimDomainConfig, DmarcPolicyDomain, DnsblListEntry, DomainOverride,
@@ -23,6 +23,7 @@ pub fn add_frontend(path: &Path, frontend: FrontendConfig) -> Result<()> {
         )));
     }
     config.frontend.push(frontend);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -37,6 +38,7 @@ pub fn remove_frontend(path: &Path, name: &str) -> Result<()> {
             name
         )));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -51,6 +53,7 @@ pub fn update_frontend(path: &Path, name: &str, mut frontend: FrontendConfig) ->
         .position(|f| f.name == name)
         .ok_or_else(|| ServerWallError::Config(format!("frontend '{}' not found", name)))?;
     config.frontend[idx] = frontend;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -64,6 +67,7 @@ pub fn add_backend_pool(path: &Path, pool: BackendPoolConfig) -> Result<()> {
         )));
     }
     config.backend_pool.push(pool);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -78,6 +82,7 @@ pub fn remove_backend_pool(path: &Path, name: &str) -> Result<()> {
             name
         )));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -91,6 +96,7 @@ pub fn update_backend_pool(path: &Path, pool_name: &str, mut pool: BackendPoolCo
         .position(|p| p.name == pool_name)
         .ok_or_else(|| ServerWallError::Config(format!("backend pool '{}' not found", pool_name)))?;
     config.backend_pool[idx] = pool;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -111,6 +117,7 @@ pub fn add_backend(path: &Path, pool_name: &str, backend: BackendConfig) -> Resu
         )));
     }
     pool.backend.push(backend);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -132,6 +139,7 @@ pub fn remove_backend(path: &Path, pool_name: &str, backend_name: &str) -> Resul
             backend_name, pool_name
         )));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -145,6 +153,7 @@ pub fn add_waf_ruleset(path: &Path, ruleset: WafRulesetConfig) -> Result<()> {
         )));
     }
     config.waf_ruleset.push(ruleset);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -159,6 +168,7 @@ pub fn remove_waf_ruleset(path: &Path, name: &str) -> Result<()> {
             name
         )));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -173,6 +183,7 @@ pub fn update_waf_ruleset(path: &Path, name: &str, mut ruleset: WafRulesetConfig
         .position(|r| r.name == name)
         .ok_or_else(|| ServerWallError::Config(format!("WAF ruleset '{}' not found", name)))?;
     config.waf_ruleset[idx] = ruleset;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -192,6 +203,7 @@ pub fn add_dkim_domain(path: &Path, domain: DkimDomainConfig) -> Result<()> {
         )));
     }
     config.relay.dkim.domains.push(domain);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -206,6 +218,7 @@ pub fn remove_dkim_domain(path: &Path, domain: &str) -> Result<()> {
             domain
         )));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -215,6 +228,7 @@ pub fn add_acl_allow(path: &Path, ip: &str) -> Result<()> {
     if !config.security.acl.ip.allow.contains(&ip.to_string()) {
         config.security.acl.ip.allow.push(ip.to_string());
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -224,6 +238,7 @@ pub fn add_acl_block(path: &Path, ip: &str) -> Result<()> {
     if !config.security.acl.ip.block.contains(&ip.to_string()) {
         config.security.acl.ip.block.push(ip.to_string());
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -232,6 +247,7 @@ pub fn remove_acl_ip(path: &Path, ip: &str) -> Result<()> {
     let mut config = load_config(path)?;
     config.security.acl.ip.allow.retain(|a| a != ip);
     config.security.acl.ip.block.retain(|b| b != ip);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -244,12 +260,14 @@ pub fn add_antispam_allow_ip(path: &Path, ip: &str) -> Result<()> {
     if !config.antispam.allow.ips.contains(&ip.to_string()) {
         config.antispam.allow.ips.push(ip.to_string());
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
 pub fn remove_antispam_allow_ip(path: &Path, ip: &str) -> Result<()> {
     let mut config = load_config(path)?;
     config.antispam.allow.ips.retain(|x| x != ip);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -259,6 +277,7 @@ pub fn add_antispam_allow_sender(path: &Path, sender: &str) -> Result<()> {
     if !config.antispam.allow.senders.contains(&s) {
         config.antispam.allow.senders.push(s);
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -266,6 +285,7 @@ pub fn remove_antispam_allow_sender(path: &Path, sender: &str) -> Result<()> {
     let s = sender.to_lowercase();
     let mut config = load_config(path)?;
     config.antispam.allow.senders.retain(|x| x != &s);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -275,6 +295,7 @@ pub fn add_antispam_allow_domain(path: &Path, domain: &str) -> Result<()> {
     if !config.antispam.allow.sender_domains.contains(&d) {
         config.antispam.allow.sender_domains.push(d);
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -282,6 +303,7 @@ pub fn remove_antispam_allow_domain(path: &Path, domain: &str) -> Result<()> {
     let d = domain.to_lowercase();
     let mut config = load_config(path)?;
     config.antispam.allow.sender_domains.retain(|x| x != &d);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -294,12 +316,14 @@ pub fn add_antispam_block_ip(path: &Path, ip: &str) -> Result<()> {
     if !config.antispam.block.ips.contains(&ip.to_string()) {
         config.antispam.block.ips.push(ip.to_string());
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
 pub fn remove_antispam_block_ip(path: &Path, ip: &str) -> Result<()> {
     let mut config = load_config(path)?;
     config.antispam.block.ips.retain(|x| x != ip);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -309,6 +333,7 @@ pub fn add_antispam_block_sender(path: &Path, sender: &str) -> Result<()> {
     if !config.antispam.block.senders.contains(&s) {
         config.antispam.block.senders.push(s);
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -316,6 +341,7 @@ pub fn remove_antispam_block_sender(path: &Path, sender: &str) -> Result<()> {
     let s = sender.to_lowercase();
     let mut config = load_config(path)?;
     config.antispam.block.senders.retain(|x| x != &s);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -325,6 +351,7 @@ pub fn add_antispam_block_domain(path: &Path, domain: &str) -> Result<()> {
     if !config.antispam.block.sender_domains.contains(&d) {
         config.antispam.block.sender_domains.push(d);
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -332,6 +359,7 @@ pub fn remove_antispam_block_domain(path: &Path, domain: &str) -> Result<()> {
     let d = domain.to_lowercase();
     let mut config = load_config(path)?;
     config.antispam.block.sender_domains.retain(|x| x != &d);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -348,6 +376,7 @@ pub fn add_antispam_dnsbl_zone(path: &Path, zone: DnsblListEntry) -> Result<()> 
         )));
     }
     config.antispam.dnsbl.lists.push(zone);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -361,6 +390,7 @@ pub fn remove_antispam_dnsbl_zone(path: &Path, zone_name: &str) -> Result<()> {
             zone_name
         )));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -368,6 +398,7 @@ pub fn remove_antispam_dnsbl_zone(path: &Path, zone_name: &str) -> Result<()> {
 pub fn set_antispam_config(path: &Path, antispam: AntispamConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.antispam = antispam;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -418,6 +449,7 @@ pub fn update_antispam_checks(path: &Path, update: AntispamChecksUpdate) -> Resu
         if let Some(v) = c.on_scanner_error    { a.antivirus.on_scanner_error    = v; }
         if let Some(v) = c.on_scanner_timeout  { a.antivirus.on_scanner_timeout  = v; }
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -479,6 +511,7 @@ pub fn add_antispam_surbl_zone(path: &Path, zone: String) -> Result<()> {
         return Err(ServerWallError::Config(format!("SURBL zone '{}' already exists", zone)));
     }
     config.antispam.url_analysis.surbl_zones.push(zone);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -490,6 +523,7 @@ pub fn remove_antispam_surbl_zone(path: &Path, zone: &str) -> Result<()> {
     if config.antispam.url_analysis.surbl_zones.len() == before {
         return Err(ServerWallError::Config(format!("SURBL zone '{}' not found", zone)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -503,6 +537,7 @@ pub fn add_antispam_scanner(path: &Path, scanner: ScannerConfig) -> Result<()> {
         )));
     }
     config.antispam.antivirus.scanners.push(scanner);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -514,6 +549,7 @@ pub fn remove_antispam_scanner(path: &Path, name: &str) -> Result<()> {
     if config.antispam.antivirus.scanners.len() == before {
         return Err(ServerWallError::Config(format!("scanner '{}' not found", name)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -524,6 +560,7 @@ pub fn add_trusted_host(path: &Path, host: String) -> Result<()> {
         return Err(ServerWallError::Config(format!("trusted host '{}' already exists", host)));
     }
     config.relay.trusted_hosts.hosts.push(host);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -535,6 +572,7 @@ pub fn remove_trusted_host(path: &Path, host: &str) -> Result<()> {
     if config.relay.trusted_hosts.hosts.len() == before {
         return Err(ServerWallError::Config(format!("trusted host '{}' not found", host)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -548,6 +586,7 @@ pub fn add_dmarc_policy_domain(path: &Path, domain: DmarcPolicyDomain) -> Result
         )));
     }
     config.relay.dmarc_publish.domains.push(domain);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -558,6 +597,7 @@ pub fn update_dmarc_policy_domain(path: &Path, domain_name: &str, mut domain: Dm
     let idx = config.relay.dmarc_publish.domains.iter().position(|d| d.domain == domain_name)
         .ok_or_else(|| ServerWallError::Config(format!("DMARC policy for '{}' not found", domain_name)))?;
     config.relay.dmarc_publish.domains[idx] = domain;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -569,6 +609,7 @@ pub fn remove_dmarc_policy_domain(path: &Path, domain: &str) -> Result<()> {
     if config.relay.dmarc_publish.domains.len() == before {
         return Err(ServerWallError::Config(format!("DMARC policy for '{}' not found", domain)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -582,6 +623,7 @@ pub fn add_spf_domain(path: &Path, domain: SpfDomainConfig) -> Result<()> {
         )));
     }
     config.relay.spf_publish.domains.push(domain);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -592,6 +634,7 @@ pub fn update_spf_domain(path: &Path, domain_name: &str, mut domain: SpfDomainCo
     let idx = config.relay.spf_publish.domains.iter().position(|d| d.domain == domain_name)
         .ok_or_else(|| ServerWallError::Config(format!("SPF record for '{}' not found", domain_name)))?;
     config.relay.spf_publish.domains[idx] = domain;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -603,6 +646,7 @@ pub fn remove_spf_domain(path: &Path, domain: &str) -> Result<()> {
     if config.relay.spf_publish.domains.len() == before {
         return Err(ServerWallError::Config(format!("SPF record for '{}' not found", domain)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -610,6 +654,7 @@ pub fn remove_spf_domain(path: &Path, domain: &str) -> Result<()> {
 pub fn set_relay_config(path: &Path, relay: RelayConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.relay = relay;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -621,6 +666,7 @@ pub fn set_relay_config(path: &Path, relay: RelayConfig) -> Result<()> {
 pub fn update_security_tls(path: &Path, tls: SecurityTlsConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.security.tls = tls;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -628,6 +674,7 @@ pub fn update_security_tls(path: &Path, tls: SecurityTlsConfig) -> Result<()> {
 pub fn update_security_geo(path: &Path, geo: GeoConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.security.geo = geo;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -635,6 +682,7 @@ pub fn update_security_geo(path: &Path, geo: GeoConfig) -> Result<()> {
 pub fn update_security_headers(path: &Path, headers: SecurityHeadersConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.security.headers = headers;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -642,6 +690,7 @@ pub fn update_security_headers(path: &Path, headers: SecurityHeadersConfig) -> R
 pub fn update_security_bot(path: &Path, bot: BotDetectionConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.security.bot_detection = bot;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -649,6 +698,7 @@ pub fn update_security_bot(path: &Path, bot: BotDetectionConfig) -> Result<()> {
 pub fn update_security_cookies(path: &Path, cookies: CookieSecurityConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.security.cookies = cookies;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -662,6 +712,7 @@ pub fn add_security_rate_limit(path: &Path, rule: RateLimitConfig) -> Result<()>
         )));
     }
     config.security.rate_limit.push(rule);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -676,6 +727,7 @@ pub fn remove_security_rate_limit(path: &Path, name: &str) -> Result<()> {
             name
         )));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -687,6 +739,7 @@ pub fn add_security_profile(path: &Path, profile: SecurityProfile) -> Result<()>
         )));
     }
     config.security_profiles.push(profile);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -695,6 +748,7 @@ pub fn update_security_profile(path: &Path, name: &str, profile: SecurityProfile
     let pos = config.security_profiles.iter().position(|p| p.name == name)
         .ok_or_else(|| ServerWallError::Config(format!("Security profile '{}' not found", name)))?;
     config.security_profiles[pos] = profile;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -705,6 +759,7 @@ pub fn remove_security_profile(path: &Path, name: &str) -> Result<()> {
     if config.security_profiles.len() == before {
         return Err(ServerWallError::Config(format!("Security profile '{}' not found", name)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -716,6 +771,7 @@ pub fn add_tls_profile(path: &Path, profile: TlsProfile) -> Result<()> {
         )));
     }
     config.tls_profiles.push(profile);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -724,6 +780,7 @@ pub fn update_tls_profile(path: &Path, name: &str, profile: TlsProfile) -> Resul
     let pos = config.tls_profiles.iter().position(|p| p.name == name)
         .ok_or_else(|| ServerWallError::Config(format!("TLS profile '{}' not found", name)))?;
     config.tls_profiles[pos] = profile;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -734,6 +791,7 @@ pub fn remove_tls_profile(path: &Path, name: &str) -> Result<()> {
     if config.tls_profiles.len() == before {
         return Err(ServerWallError::Config(format!("TLS profile '{}' not found", name)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -745,6 +803,7 @@ pub fn add_log_profile(path: &Path, profile: LogProfile) -> Result<()> {
         )));
     }
     config.log_profiles.push(profile);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -753,6 +812,7 @@ pub fn update_log_profile(path: &Path, name: &str, profile: LogProfile) -> Resul
     let pos = config.log_profiles.iter().position(|p| p.name == name)
         .ok_or_else(|| ServerWallError::Config(format!("Logging profile '{}' not found", name)))?;
     config.log_profiles[pos] = profile;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -763,6 +823,7 @@ pub fn remove_log_profile(path: &Path, name: &str) -> Result<()> {
     if config.log_profiles.len() == before {
         return Err(ServerWallError::Config(format!("Logging profile '{}' not found", name)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -774,6 +835,7 @@ pub fn remove_log_profile(path: &Path, name: &str) -> Result<()> {
 pub fn update_global_config(path: &Path, global: GlobalConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.global = global;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -781,6 +843,7 @@ pub fn update_global_config(path: &Path, global: GlobalConfig) -> Result<()> {
 pub fn update_acme_config(path: &Path, acme: AcmeConfig) -> Result<()> {
     let mut config = load_config(path)?;
     config.acme = acme;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -796,6 +859,7 @@ pub fn add_antispam_domain_override(path: &Path, entry: DomainOverride) -> Resul
         )));
     }
     config.antispam.domain_overrides.push(entry);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -805,6 +869,7 @@ pub fn update_antispam_domain_override(path: &Path, domain: &str, mut entry: Dom
     let idx = config.antispam.domain_overrides.iter().position(|d| d.domain == domain)
         .ok_or_else(|| ServerWallError::Config(format!("domain override for '{}' not found", domain)))?;
     config.antispam.domain_overrides[idx] = entry;
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -815,6 +880,7 @@ pub fn remove_antispam_domain_override(path: &Path, domain: &str) -> Result<()> 
     if config.antispam.domain_overrides.len() == before {
         return Err(ServerWallError::Config(format!("domain override for '{}' not found", domain)));
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -828,6 +894,7 @@ pub fn add_antispam_allow_recipient(path: &Path, recipient: &str) -> Result<()> 
     if !config.antispam.allow.recipients.contains(&r) {
         config.antispam.allow.recipients.push(r);
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -835,6 +902,7 @@ pub fn remove_antispam_allow_recipient(path: &Path, recipient: &str) -> Result<(
     let r = recipient.to_lowercase();
     let mut config = load_config(path)?;
     config.antispam.allow.recipients.retain(|x| x != &r);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -844,6 +912,7 @@ pub fn add_antispam_block_recipient(path: &Path, recipient: &str) -> Result<()> 
     if !config.antispam.block.recipients.contains(&r) {
         config.antispam.block.recipients.push(r);
     }
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }
 
@@ -851,5 +920,6 @@ pub fn remove_antispam_block_recipient(path: &Path, recipient: &str) -> Result<(
     let r = recipient.to_lowercase();
     let mut config = load_config(path)?;
     config.antispam.block.recipients.retain(|x| x != &r);
+    validate_config(&config)?;
     write_config_atomic(path, &config)
 }

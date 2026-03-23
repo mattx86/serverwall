@@ -1,10 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Antispam</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Antispam{% endblock %}
+{% block head_extra %}
 <style>
 .check-row{display:flex;align-items:center;gap:.6rem;padding:.38rem 0;border-bottom:1px solid rgba(255,255,255,.05);max-width:640px}
 .check-row:last-of-type{border-bottom:none}
@@ -27,15 +23,8 @@
 .dnsbl-table th{text-align:left;padding:.3rem .5rem;font-size:.75rem;color:var(--muted);font-weight:500}
 .dnsbl-table td{padding:.3rem .5rem;border-bottom:1px solid rgba(255,255,255,.04)}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar">
       <h2 style="margin:0;flex:1">Antispam</h2>
       <div style="display:flex;align-items:center;gap:.5rem;font-size:.85rem">
@@ -295,10 +284,8 @@
         <div style="margin-top:.4rem"><span id="ovErr" style="color:var(--danger,#f87171);font-size:.82rem;display:none"></span></div>
       </div>
     </div>
-
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
@@ -722,5 +709,4 @@ initPage('antispam');
 loadAll();
 loadConfig();
 </script>
-</body>
-</html>
+{% endblock %}

@@ -4,6 +4,7 @@ use std::sync::atomic::Ordering;
 
 use tokio::net::TcpStream;
 use tokio::sync::watch;
+use tokio_rustls::server::TlsStream;
 
 use serverwall_core::acl::{AccessControlEngine, GeoEngine};
 use serverwall_core::balancer::{IpHash, LeastConnections, LoadBalancer, RoundRobin};
@@ -62,7 +63,8 @@ impl Server {
 
     /// Run the server: set up backends, health checkers, and listeners.
     ///
-    /// Blocks until a shutdown signal is received.
+    /// Reacts to SIGHUP (config reload) by dynamically stopping old listeners
+    /// and starting new ones.  Blocks until SIGTERM or Ctrl-C.
     pub async fn run(&self) -> anyhow::Result<()> {
         // Write PID file so that serverwallctl/webui can send SIGHUP for reload
         let pid_file = self.config.global.pid_file
@@ -73,491 +75,545 @@ impl Server {
         }
         let _ = std::fs::write(&pid_file, std::process::id().to_string());
 
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        // Process-level shutdown channel — used by relay and health checkers.
+        // Only fires on SIGTERM/Ctrl-C, NOT on config reload.
+        let (proc_shutdown_tx, proc_shutdown_rx) = watch::channel(false);
 
-        let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-
-        // Spawn SIGHUP config reload handler
-        {
-            let reload_handler = ReloadHandler::new(self.config_path.clone());
-            let (config_tx, _config_rx) = tokio::sync::watch::channel(None);
-            let rx = shutdown_rx.clone();
-            tasks.push(tokio::spawn(async move {
-                reload_handler.run(config_tx, rx).await;
-            }));
-        }
-
-        // Build backend pools (name -> Vec<Arc<Backend>>)
-        let pools = build_backend_pools(&self.config);
-
-        // Start health checkers for each pool
-        for pool_config in &self.config.backend_pool {
-            if let Some(backends) = pools.get(&pool_config.name) {
-                let checker = HealthChecker::new(backends.clone(), pool_config);
-                let rx = shutdown_rx.clone();
-                tasks.push(tokio::spawn(async move {
-                    checker.run(rx).await;
-                }));
-            }
-        }
-
-        // Build geo engine once (shared across all frontends).
-        let geo_engine: Option<Arc<GeoEngine>> =
-            GeoEngine::from_config(&self.config.security.geo).map(Arc::new);
-
-        // Build the global IP ACL from [security.acl.ip] (shared across all frontends).
-        let global_ip_acl: Option<Arc<AccessControlEngine>> = {
-            let ip = &self.config.security.acl.ip;
-            if ip.allow.is_empty() && ip.block.is_empty() {
-                None
-            } else {
-                match AccessControlEngine::from_global_ip(ip) {
-                    Ok(engine) => Some(Arc::new(engine)),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "global IP ACL parse error — global ACL disabled");
-                        None
-                    }
-                }
-            }
-        };
-
-        // Start relay daemon (delivery manager + optional inbound receiver).
+        // Start relay daemon (survives config reloads — restating it would risk
+        // losing in-flight messages).
+        let mut relay_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
         if self.config.relay.enabled {
-            match build_relay(&self.config.relay, shutdown_rx.clone()) {
-                Ok(relay_handles) => tasks.extend(relay_handles),
+            match build_relay(&self.config.relay, proc_shutdown_rx.clone()) {
+                Ok(handles) => relay_tasks.extend(handles),
                 Err(e) => tracing::error!(error = %e, "relay startup failed — relay disabled"),
             }
         }
 
-        // Build HTTP rate limiters from security config (shared across HTTPS frontends).
-        let rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>> = self.config.security.rate_limit
-            .iter()
-            .map(|r| {
-                let limiter = RateLimiter::with_limits(r.requests, r.window_secs);
-                let key = RateLimitKey::from_str(&r.key);
-                Arc::new((limiter, key))
-            })
-            .collect();
+        // Wire up the SIGHUP config reload channel so config changes are applied.
+        let (config_tx, mut config_rx) =
+            tokio::sync::watch::channel::<Option<ServerWallConfig>>(None);
+        {
+            let handler = ReloadHandler::new(self.config_path.clone());
+            let rx = proc_shutdown_rx.clone();
+            tokio::spawn(async move { handler.run(config_tx, rx).await; });
+        }
 
-        // Start a listener for each frontend
-        for frontend in &self.config.frontend {
-            let pool_backends = pools
-                .get(&frontend.backend_pool)
-                .cloned()
-                .unwrap_or_default();
+        // Per-frontend shutdown senders + task handles.
+        // Key: frontend name; Value: (shutdown_tx, JoinHandle).
+        let mut fe_shutdowns: std::collections::HashMap<
+            String,
+            (watch::Sender<bool>, tokio::task::JoinHandle<()>),
+        > = Default::default();
 
-            let balancer = build_balancer(frontend.balancer);
+        // Health-checker task handles — aborted and rebuilt on every reload.
+        let mut hc_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-            let acl = AccessControlEngine::from_config(&frontend.acl)
-                .map_err(|e| anyhow::anyhow!("ACL config error in frontend '{}': {}", frontend.name, e))?;
+        // Start listeners for the initial config.
+        apply_config(
+            &self.config,
+            &mut fe_shutdowns,
+            &mut hc_tasks,
+            proc_shutdown_rx.clone(),
+        )
+        .await?;
 
-            // If the frontend has a security profile with a geo override, use that geo engine;
-            // otherwise fall back to the global geo engine.
-            let frontend_geo: Option<Arc<GeoEngine>> =
-                if let Some(ref pname) = frontend.security_profile {
-                    if let Some(p) = self.config.security_profiles.iter().find(|p| p.name == *pname) {
-                        GeoEngine::from_config(&p.geo).map(Arc::new).or_else(|| geo_engine.clone())
-                    } else {
-                        geo_engine.clone()
+        // Convert the one-shot shutdown signal into a channel so we can
+        // select! on it in a loop without consuming the future each iteration.
+        let (kill_tx, mut kill_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            wait_for_shutdown_signal().await;
+            let _ = kill_tx.send(());
+        });
+
+        // Main event loop: config reload vs process shutdown.
+        loop {
+            tokio::select! {
+                biased;
+
+                // Process shutdown (SIGTERM / Ctrl-C)
+                _ = &mut kill_rx => {
+                    tracing::info!("shutdown signal received, stopping all listeners");
+                    for (name, (tx, _)) in fe_shutdowns.drain() {
+                        let _ = tx.send(true);
+                        tracing::debug!(frontend = %name, "listener shutdown signal sent");
                     }
-                } else {
-                    geo_engine.clone()
-                };
-
-            let pipeline = Arc::new(RequestPipeline::new(
-                acl,
-                global_ip_acl.clone(),
-                frontend_geo,
-                balancer,
-                pool_backends,
-                self.config.security.tls.backend_tls_verify,
-                self.config.security.tls.backend_ca_bundle.clone(),
-            ));
-
-            match frontend.protocol {
-                ProtocolType::Tcp => {
-                    let listener = TcpListenerTask::new(
-                        frontend.listen.clone(),
-                        frontend.name.clone(),
-                        frontend.max_connections,
-                    );
-                    let rx = shutdown_rx.clone();
-                    let frontend_name = frontend.name.clone();
-                    let pipeline = pipeline.clone();
-
-                    tasks.push(tokio::spawn(async move {
-                        if let Err(e) = run_tcp_frontend(listener, pipeline, &frontend_name, rx).await {
-                            tracing::error!(
-                                frontend = %frontend_name,
-                                error = %e,
-                                "TCP frontend failed",
-                            );
-                        }
-                    }));
+                    for task in hc_tasks.drain(..) { task.abort(); }
+                    break;
                 }
-                ProtocolType::Imaps => {
-                    let cert_store = Arc::new(CertStore::new());
-                    let certified_key = CertStore::load_from_frontend(frontend)
-                        .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
-                    cert_store.add_from_cert(certified_key.clone());
-                    cert_store.set_default(certified_key);
 
-                    let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
-                        .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
-
-                    let listener = TlsListenerTask::new(
-                        frontend.listen.clone(),
-                        frontend.name.clone(),
-                        frontend.max_connections,
-                        acceptor,
-                    );
-                    let rx = shutdown_rx.clone();
-                    let frontend_name = frontend.name.clone();
-                    let pipeline = pipeline.clone();
-
-                    tasks.push(tokio::spawn(async move {
-                        if let Err(e) = run_imap_frontend(listener, pipeline, &frontend_name, rx).await {
-                            tracing::error!(
-                                frontend = %frontend_name,
-                                error = %e,
-                                "IMAP frontend failed",
-                            );
-                        }
-                    }));
-                }
-                ProtocolType::Https => {
-                    let cert_store = Arc::new(CertStore::new());
-                    let certified_key = CertStore::load_from_frontend(frontend)
-                        .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
-
-                    // Resolve TLS policy: tls_profile overrides global security.tls.
-                    let (eff_hsts_max_age, eff_hsts_subdomains, eff_ocsp, eff_min_version) =
-                        if let Some(ref pname) = frontend.tls_profile {
-                            match self.config.tls_profiles.iter().find(|p| p.name == *pname) {
-                                Some(p) => (p.hsts_max_age, p.hsts_include_subdomains, p.ocsp_stapling, p.min_version.clone()),
-                                None => {
-                                    tracing::warn!(
-                                        frontend = %frontend.name,
-                                        profile  = %pname,
-                                        "TLS profile not found; falling back to global settings",
-                                    );
-                                    (
-                                        self.config.security.tls.hsts_max_age,
-                                        self.config.security.tls.hsts_include_subdomains,
-                                        self.config.security.tls.ocsp_stapling,
-                                        frontend.tls_min_version.clone(),
-                                    )
-                                }
-                            }
-                        } else {
-                            (
-                                self.config.security.tls.hsts_max_age,
-                                self.config.security.tls.hsts_include_subdomains,
-                                self.config.security.tls.ocsp_stapling,
-                                frontend.tls_min_version.clone(),
-                            )
-                        };
-
-                    // Optionally fetch and attach an OCSP staple.
-                    let certified_key = if eff_ocsp {
-                        staple_certified_key(certified_key).await
-                    } else {
-                        certified_key
-                    };
-
-                    cert_store.add_from_cert(certified_key.clone());
-                    cert_store.set_default(certified_key);
-
-                    let acceptor = build_tls_acceptor(cert_store, &eff_min_version)
-                        .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
-
-                    let tls_listener = TlsListenerTask::new(
-                        frontend.listen.clone(),
-                        frontend.name.clone(),
-                        frontend.max_connections,
-                        acceptor,
-                    );
-
-                    // Resolve security settings: use profile overrides if a profile is assigned.
-                    let (eff_waf_enabled, eff_waf_ruleset, eff_headers, eff_cookies, eff_bot) =
-                        if let Some(ref profile_name) = frontend.security_profile {
-                            match self.config.security_profiles.iter().find(|p| p.name == *profile_name) {
-                                Some(p) => (
-                                    p.waf_enabled,
-                                    p.waf_ruleset.clone(),
-                                    p.headers.clone(),
-                                    p.cookies.clone(),
-                                    p.bot_detection.clone(),
-                                ),
-                                None => {
-                                    tracing::warn!(
-                                        frontend = %frontend.name,
-                                        profile  = %profile_name,
-                                        "security profile not found; falling back to global settings",
-                                    );
-                                    (
-                                        frontend.waf_enabled,
-                                        frontend.waf_ruleset.clone(),
-                                        self.config.security.headers.clone(),
-                                        self.config.security.cookies.clone(),
-                                        self.config.security.bot_detection.clone(),
-                                    )
-                                }
-                            }
-                        } else {
-                            (
-                                frontend.waf_enabled,
-                                frontend.waf_ruleset.clone(),
-                                self.config.security.headers.clone(),
-                                self.config.security.cookies.clone(),
-                                self.config.security.bot_detection.clone(),
-                            )
-                        };
-
-                    // Build WAF engine if enabled, using the named ruleset config if present.
-                    // global security.enabled = false disables WAF regardless of per-frontend setting.
-                    let waf = if eff_waf_enabled && self.config.security.enabled {
-                        let engine = if let Some(ref ruleset_name) = eff_waf_ruleset {
-                            self.config
-                                .waf_ruleset
-                                .iter()
-                                .find(|r| &r.name == ruleset_name)
-                                .map(|r| serverwall_waf::WafEngine::from_ruleset_config(r))
-                                .unwrap_or_else(|| {
-                                    tracing::warn!(
-                                        frontend = %frontend.name,
-                                        ruleset = %ruleset_name,
-                                        "WAF ruleset not found, using defaults",
-                                    );
-                                    serverwall_waf::WafEngine::new(serverwall_waf::WafMode::Blocking)
-                                })
-                        } else {
-                            serverwall_waf::WafEngine::new(serverwall_waf::WafMode::Blocking)
-                        };
-                        Some(std::sync::Arc::new(engine))
-                    } else {
-                        None
-                    };
-
-                    // Build path ACL from global security config if any rules are defined.
-                    let path_acl = {
-                        let acl = serverwall_core::acl::PathAcl::from_config(
-                            &self.config.security.acl.path_patterns,
-                        );
-                        if acl.is_empty() {
-                            None
-                        } else {
-                            Some(Arc::new(acl))
+                // Config reload (SIGHUP)
+                result = config_rx.changed() => {
+                    if result.is_err() { break; }
+                    let new_config = {
+                        let borrowed = config_rx.borrow_and_update();
+                        match borrowed.as_ref() {
+                            Some(c) => c.clone(),
+                            None => continue,
                         }
                     };
+                    tracing::info!("applying reloaded configuration to proxy listeners");
 
-                    // Resolve effective log settings from log_profile (if set) or inline fields.
-                    let (eff_log_format, eff_access_log, eff_log_file) =
-                        if let Some(ref pname) = frontend.log_profile {
-                            match self.config.log_profiles.iter().find(|p| p.name == *pname) {
-                                Some(p) => (p.format, p.access_log, frontend.log_file.clone()),
-                                None => {
-                                    tracing::warn!(
-                                        frontend = %frontend.name,
-                                        profile  = %pname,
-                                        "log profile not found; falling back to inline settings",
-                                    );
-                                    (frontend.log_format, frontend.access_log, frontend.log_file.clone())
-                                }
-                            }
-                        } else {
-                            (frontend.log_format, frontend.access_log, frontend.log_file.clone())
-                        };
+                    // Stop all current frontend listeners and wait for them to
+                    // fully exit so their ports are released before rebinding.
+                    let mut old_handles = Vec::new();
+                    for (name, (tx, handle)) in fe_shutdowns.drain() {
+                        let _ = tx.send(true);
+                        tracing::info!(frontend = %name, "listener stopped for reload");
+                        old_handles.push(handle);
+                    }
+                    for task in hc_tasks.drain(..) { task.abort(); }
+                    for h in old_handles { let _ = h.await; }
 
-                    // Open access log file if enabled and a path is configured.
-                    let log_writer: Option<Arc<tokio::sync::Mutex<tokio::io::BufWriter<tokio::fs::File>>>> =
-                        if eff_access_log {
-                            if let Some(ref path) = eff_log_file {
-                                match tokio::fs::OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(path)
-                                    .await
-                                {
-                                    Ok(file) => Some(Arc::new(tokio::sync::Mutex::new(
-                                        tokio::io::BufWriter::new(file),
-                                    ))),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            frontend = %frontend.name,
-                                            path = %path,
-                                            error = %e,
-                                            "cannot open access log file — logging disabled for this frontend",
-                                        );
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                    let http_proxy = Arc::new(HttpProxy::new(
-                        frontend.clone(),
-                        eff_headers,
-                        waf,
-                        pipeline.clone(),
-                        path_acl,
-                        eff_bot,
-                        eff_hsts_max_age,
-                        eff_hsts_subdomains,
-                        rate_limiters.clone(),
-                        eff_cookies,
-                        log_writer,
-                        eff_log_format,
-                        self.config.security.acl.acl_bypass_waf,
-                        self.config.security.acl.domain.allow.clone(),
-                        self.config.security.acl.domain.block.clone(),
-                    ));
-
-                    let rx = shutdown_rx.clone();
-                    let frontend_name = frontend.name.clone();
-                    let pipeline = pipeline.clone();
-
-                    tasks.push(tokio::spawn(async move {
-                        if let Err(e) = run_https_frontend(
-                            tls_listener,
-                            pipeline,
-                            http_proxy,
-                            &frontend_name,
-                            rx,
-                        )
-                        .await
-                        {
-                            tracing::error!(
-                                frontend = %frontend_name,
-                                error = %e,
-                                "HTTPS frontend failed",
-                            );
-                        }
-                    }));
-                }
-                ProtocolType::Smtps => {
-                    let cert_store = Arc::new(CertStore::new());
-                    let certified_key = CertStore::load_from_frontend(frontend)
-                        .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
-                    cert_store.add_from_cert(certified_key.clone());
-                    cert_store.set_default(certified_key);
-
-                    let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
-                        .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
-
-                    let listener = TlsListenerTask::new(
-                        frontend.listen.clone(),
-                        frontend.name.clone(),
-                        frontend.max_connections,
-                        acceptor,
-                    );
-
-                    let rx = shutdown_rx.clone();
-                    let frontend_name = frontend.name.clone();
-                    let smtp_headers = frontend.smtp_headers.clone();
-                    let pipeline = pipeline.clone();
-                    let effective_antispam: std::borrow::Cow<AntispamConfig> =
-                        resolve_antispam_for_profile(
-                            &self.config.antispam,
-                            frontend.security_profile.as_deref(),
-                            &self.config.security_profiles,
+                    // Apply the new config.
+                    if let Err(e) = apply_config(
+                        &new_config,
+                        &mut fe_shutdowns,
+                        &mut hc_tasks,
+                        proc_shutdown_rx.clone(),
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            error = %e,
+                            "config reload failed; some listeners may not be running",
                         );
-                    let antispam_pipeline = build_antispam_pipeline(&effective_antispam);
-                    let allow_list = build_allow_list(&self.config.antispam);
-                    let block_list = build_block_list(&self.config.antispam);
-                    let hostname = self.config.global.daemon_name.clone();
-
-                    tasks.push(tokio::spawn(async move {
-                        if let Err(e) = run_smtps_frontend(
-                            listener,
-                            pipeline,
-                            antispam_pipeline,
-                            allow_list,
-                            block_list,
-                            hostname,
-                            &frontend_name,
-                            smtp_headers,
-                            rx,
-                        ).await {
-                            tracing::error!(
-                                frontend = %frontend_name,
-                                error = %e,
-                                "SMTPS frontend failed",
-                            );
-                        }
-                    }));
-                }
-                ProtocolType::SmtpStarttls => {
-                    // For STARTTLS, we listen on plain TCP and the SmtpProxy
-                    // handles the TLS upgrade internally.  However, since TLS
-                    // upgrade requires a TlsAcceptor, we build one and pass it
-                    // through.  For this implementation, the proxy itself does
-                    // not do inline STARTTLS -- it advertises STARTTLS but
-                    // returns 454 if the listener didn't already upgrade.
-                    // In a production system the listener would intercept
-                    // STARTTLS and upgrade in-place.
-                    let listener = TcpListenerTask::new(
-                        frontend.listen.clone(),
-                        frontend.name.clone(),
-                        frontend.max_connections,
-                    );
-
-                    let rx = shutdown_rx.clone();
-                    let frontend_name = frontend.name.clone();
-                    let smtp_headers = frontend.smtp_headers.clone();
-                    let pipeline = pipeline.clone();
-                    let effective_antispam: std::borrow::Cow<AntispamConfig> =
-                        resolve_antispam_for_profile(
-                            &self.config.antispam,
-                            frontend.security_profile.as_deref(),
-                            &self.config.security_profiles,
-                        );
-                    let antispam_pipeline = build_antispam_pipeline(&effective_antispam);
-                    let allow_list = build_allow_list(&self.config.antispam);
-                    let block_list = build_block_list(&self.config.antispam);
-                    let hostname = self.config.global.daemon_name.clone();
-
-                    tasks.push(tokio::spawn(async move {
-                        if let Err(e) = run_smtp_starttls_frontend(
-                            listener,
-                            pipeline,
-                            antispam_pipeline,
-                            allow_list,
-                            block_list,
-                            hostname,
-                            &frontend_name,
-                            smtp_headers,
-                            rx,
-                        ).await {
-                            tracing::error!(
-                                frontend = %frontend_name,
-                                error = %e,
-                                "SMTP-STARTTLS frontend failed",
-                            );
-                        }
-                    }));
+                    }
                 }
             }
         }
 
-        // Wait for shutdown signal
-        wait_for_shutdown_signal().await;
-
-        tracing::info!("shutdown signal received, stopping all listeners");
-        let _ = shutdown_tx.send(true);
-
-        // Wait for all tasks to finish
-        for task in tasks {
-            let _ = task.await;
-        }
+        // Shut down relay.
+        let _ = proc_shutdown_tx.send(true);
+        for task in relay_tasks { let _ = task.await; }
 
         tracing::info!("server stopped");
         Ok(())
     }
+}
+
+/// Build backend pools, start health checkers, and spawn all frontend listeners
+/// from the given configuration.
+///
+/// On first call `fe_shutdowns` and `hc_tasks` are empty (startup).
+/// On reload the caller has already drained both before calling this.
+async fn apply_config(
+    config: &ServerWallConfig,
+    fe_shutdowns: &mut std::collections::HashMap<
+        String,
+        (watch::Sender<bool>, tokio::task::JoinHandle<()>),
+    >,
+    hc_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+    proc_shutdown_rx: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let pools = build_backend_pools(config);
+
+    // Start health checkers for each pool (use proc_shutdown_rx so they
+    // keep running across config reloads and only stop on process exit).
+    for pool_config in &config.backend_pool {
+        if let Some(backends) = pools.get(&pool_config.name) {
+            let checker = HealthChecker::new(backends.clone(), pool_config);
+            let rx = proc_shutdown_rx.clone();
+            hc_tasks.push(tokio::spawn(async move { checker.run(rx).await; }));
+        }
+    }
+
+    tracing::info!(
+        frontends = config.frontend.len(),
+        pools = config.backend_pool.len(),
+        "starting proxy listeners",
+    );
+
+    // Build geo engine (shared across frontends in this config generation).
+    let geo_engine: Option<Arc<GeoEngine>> =
+        GeoEngine::from_config(&config.security.geo).map(Arc::new);
+
+    // Build the global IP ACL.
+    let global_ip_acl: Option<Arc<AccessControlEngine>> = {
+        let ip = &config.security.acl.ip;
+        if ip.allow.is_empty() && ip.block.is_empty() {
+            None
+        } else {
+            match AccessControlEngine::from_global_ip(ip) {
+                Ok(engine) => Some(Arc::new(engine)),
+                Err(e) => {
+                    tracing::warn!(error = %e, "global IP ACL parse error — global ACL disabled");
+                    None
+                }
+            }
+        }
+    };
+
+    // Build HTTP rate limiters.
+    let rate_limiters: Vec<Arc<(RateLimiter, RateLimitKey)>> = config
+        .security
+        .rate_limit
+        .iter()
+        .map(|r| {
+            let limiter = RateLimiter::with_limits(r.requests, r.window_secs);
+            let key = RateLimitKey::from_str(&r.key);
+            Arc::new((limiter, key))
+        })
+        .collect();
+
+    // Spawn a listener for each frontend.
+    for frontend in &config.frontend {
+        let pool_backends = pools
+            .get(&frontend.backend_pool)
+            .cloned()
+            .unwrap_or_default();
+
+        let balancer = build_balancer(frontend.balancer);
+
+        let acl = AccessControlEngine::from_config(&frontend.acl)
+            .map_err(|e| anyhow::anyhow!("ACL config error in frontend '{}': {}", frontend.name, e))?;
+
+        // Resolve geo engine: prefer security-profile override, fall back to global.
+        let frontend_geo: Option<Arc<GeoEngine>> =
+            if let Some(ref pname) = frontend.security_profile {
+                if let Some(p) = config.security_profiles.iter().find(|p| p.name == *pname) {
+                    GeoEngine::from_config(&p.geo).map(Arc::new).or_else(|| geo_engine.clone())
+                } else {
+                    geo_engine.clone()
+                }
+            } else {
+                geo_engine.clone()
+            };
+
+        let pipeline = Arc::new(RequestPipeline::new(
+            acl,
+            global_ip_acl.clone(),
+            frontend_geo,
+            balancer,
+            pool_backends,
+            config.security.tls.backend_tls_verify,
+            config.security.tls.backend_ca_bundle.clone(),
+        ));
+
+        // Per-frontend shutdown channel.
+        let (fe_tx, fe_rx) = watch::channel(false);
+
+        let handle = match frontend.protocol {
+            ProtocolType::Tcp => {
+                // If TLS cert fields are set, terminate TLS before proxying.
+                if frontend.tls_cert.is_some() || frontend.tls_pfx.is_some() {
+                    let cert_store = Arc::new(CertStore::new());
+                    let certified_key = CertStore::load_from_frontend(frontend)
+                        .map_err(|e| anyhow::anyhow!("TLS error in TCP frontend '{}': {}", frontend.name, e))?;
+                    cert_store.add_from_cert(certified_key.clone());
+                    cert_store.set_default(certified_key);
+                    let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
+                        .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
+                    let listener = TlsListenerTask::new(
+                        frontend.listen.clone(),
+                        frontend.name.clone(),
+                        frontend.max_connections,
+                        acceptor,
+                    );
+                    let frontend_name = frontend.name.clone();
+                    let p = pipeline.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = run_tls_tcp_frontend(listener, p, &frontend_name, fe_rx).await {
+                            tracing::error!(frontend = %frontend_name, error = %e, "TLS TCP frontend failed");
+                        }
+                    })
+                } else {
+                    // Plain TCP passthrough.
+                    let listener = TcpListenerTask::new(
+                        frontend.listen.clone(),
+                        frontend.name.clone(),
+                        frontend.max_connections,
+                    );
+                    let frontend_name = frontend.name.clone();
+                    let p = pipeline.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = run_tcp_frontend(listener, p, &frontend_name, fe_rx).await {
+                            tracing::error!(frontend = %frontend_name, error = %e, "TCP frontend failed");
+                        }
+                    })
+                }
+            }
+            ProtocolType::Imaps => {
+                let cert_store = Arc::new(CertStore::new());
+                let certified_key = CertStore::load_from_frontend(frontend)
+                    .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
+                cert_store.add_from_cert(certified_key.clone());
+                cert_store.set_default(certified_key);
+                let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
+                    .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
+                let listener = TlsListenerTask::new(
+                    frontend.listen.clone(),
+                    frontend.name.clone(),
+                    frontend.max_connections,
+                    acceptor,
+                );
+                let frontend_name = frontend.name.clone();
+                let p = pipeline.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_imap_frontend(listener, p, &frontend_name, fe_rx).await {
+                        tracing::error!(frontend = %frontend_name, error = %e, "IMAP frontend failed");
+                    }
+                })
+            }
+            ProtocolType::Https => {
+                let cert_store = Arc::new(CertStore::new());
+                let certified_key = CertStore::load_from_frontend(frontend)
+                    .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
+
+                // Resolve TLS policy: tls_profile overrides global security.tls.
+                let (eff_hsts_max_age, eff_hsts_subdomains, eff_ocsp, eff_min_version) =
+                    if let Some(ref pname) = frontend.tls_profile {
+                        match config.tls_profiles.iter().find(|p| p.name == *pname) {
+                            Some(p) => (p.hsts_max_age, p.hsts_include_subdomains, p.ocsp_stapling, p.min_version.clone()),
+                            None => {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    profile  = %pname,
+                                    "TLS profile not found; falling back to global settings",
+                                );
+                                (
+                                    config.security.tls.hsts_max_age,
+                                    config.security.tls.hsts_include_subdomains,
+                                    config.security.tls.ocsp_stapling,
+                                    frontend.tls_min_version.clone(),
+                                )
+                            }
+                        }
+                    } else {
+                        (
+                            config.security.tls.hsts_max_age,
+                            config.security.tls.hsts_include_subdomains,
+                            config.security.tls.ocsp_stapling,
+                            frontend.tls_min_version.clone(),
+                        )
+                    };
+
+                let certified_key = if eff_ocsp {
+                    staple_certified_key(certified_key).await
+                } else {
+                    certified_key
+                };
+
+                cert_store.add_from_cert(certified_key.clone());
+                cert_store.set_default(certified_key);
+
+                let acceptor = build_tls_acceptor(cert_store, &eff_min_version)
+                    .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
+
+                let tls_listener = TlsListenerTask::new(
+                    frontend.listen.clone(),
+                    frontend.name.clone(),
+                    frontend.max_connections,
+                    acceptor,
+                );
+
+                // Resolve security settings from profile or globals.
+                let (eff_waf_enabled, eff_waf_ruleset, eff_headers, eff_cookies, eff_bot) =
+                    if let Some(ref profile_name) = frontend.security_profile {
+                        match config.security_profiles.iter().find(|p| p.name == *profile_name) {
+                            Some(p) => (
+                                p.waf_enabled,
+                                p.waf_ruleset.clone(),
+                                p.headers.clone(),
+                                p.cookies.clone(),
+                                p.bot_detection.clone(),
+                            ),
+                            None => {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    profile  = %profile_name,
+                                    "security profile not found; falling back to global settings",
+                                );
+                                (
+                                    frontend.waf_enabled,
+                                    frontend.waf_ruleset.clone(),
+                                    config.security.headers.clone(),
+                                    config.security.cookies.clone(),
+                                    config.security.bot_detection.clone(),
+                                )
+                            }
+                        }
+                    } else {
+                        (
+                            frontend.waf_enabled,
+                            frontend.waf_ruleset.clone(),
+                            config.security.headers.clone(),
+                            config.security.cookies.clone(),
+                            config.security.bot_detection.clone(),
+                        )
+                    };
+
+                let waf = if eff_waf_enabled && config.security.enabled {
+                    let engine = if let Some(ref ruleset_name) = eff_waf_ruleset {
+                        config
+                            .waf_ruleset
+                            .iter()
+                            .find(|r| &r.name == ruleset_name)
+                            .map(|r| serverwall_waf::WafEngine::from_ruleset_config(r))
+                            .unwrap_or_else(|| {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    ruleset = %ruleset_name,
+                                    "WAF ruleset not found, using defaults",
+                                );
+                                serverwall_waf::WafEngine::new(serverwall_waf::WafMode::Blocking)
+                            })
+                    } else {
+                        serverwall_waf::WafEngine::new(serverwall_waf::WafMode::Blocking)
+                    };
+                    Some(std::sync::Arc::new(engine))
+                } else {
+                    None
+                };
+
+                let path_acl = {
+                    let acl = serverwall_core::acl::PathAcl::from_config(
+                        &config.security.acl.path_patterns,
+                    );
+                    if acl.is_empty() { None } else { Some(Arc::new(acl)) }
+                };
+
+                let (eff_log_format, eff_access_log, eff_log_file) =
+                    if let Some(ref pname) = frontend.log_profile {
+                        match config.log_profiles.iter().find(|p| p.name == *pname) {
+                            Some(p) => (p.format, p.access_log, frontend.log_file.clone()),
+                            None => {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    profile  = %pname,
+                                    "log profile not found; falling back to inline settings",
+                                );
+                                (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                            }
+                        }
+                    } else {
+                        (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                    };
+
+                let log_writer: Option<Arc<tokio::sync::Mutex<tokio::io::BufWriter<tokio::fs::File>>>> =
+                    if eff_access_log {
+                        if let Some(ref path) = eff_log_file {
+                            match tokio::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(path)
+                                .await
+                            {
+                                Ok(file) => Some(Arc::new(tokio::sync::Mutex::new(
+                                    tokio::io::BufWriter::new(file),
+                                ))),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        frontend = %frontend.name,
+                                        path = %path,
+                                        error = %e,
+                                        "cannot open access log file — logging disabled for this frontend",
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                let http_proxy = Arc::new(HttpProxy::new(
+                    frontend.clone(),
+                    eff_headers,
+                    waf,
+                    pipeline.clone(),
+                    path_acl,
+                    eff_bot,
+                    eff_hsts_max_age,
+                    eff_hsts_subdomains,
+                    rate_limiters.clone(),
+                    eff_cookies,
+                    log_writer,
+                    eff_log_format,
+                    config.security.acl.acl_bypass_waf,
+                    config.security.acl.domain.allow.clone(),
+                    config.security.acl.domain.block.clone(),
+                ));
+
+                let frontend_name = frontend.name.clone();
+                let p = pipeline.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_https_frontend(tls_listener, p, http_proxy, &frontend_name, fe_rx).await {
+                        tracing::error!(frontend = %frontend_name, error = %e, "HTTPS frontend failed");
+                    }
+                })
+            }
+            ProtocolType::Smtps => {
+                let cert_store = Arc::new(CertStore::new());
+                let certified_key = CertStore::load_from_frontend(frontend)
+                    .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
+                cert_store.add_from_cert(certified_key.clone());
+                cert_store.set_default(certified_key);
+                let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
+                    .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
+                let listener = TlsListenerTask::new(
+                    frontend.listen.clone(),
+                    frontend.name.clone(),
+                    frontend.max_connections,
+                    acceptor,
+                );
+                let frontend_name = frontend.name.clone();
+                let smtp_headers = frontend.smtp_headers.clone();
+                let p = pipeline.clone();
+                let effective_antispam: std::borrow::Cow<AntispamConfig> =
+                    resolve_antispam_for_profile(
+                        &config.antispam,
+                        frontend.security_profile.as_deref(),
+                        &config.security_profiles,
+                    );
+                let antispam_pipeline = build_antispam_pipeline(&effective_antispam);
+                let allow_list = build_allow_list(&config.antispam);
+                let block_list = build_block_list(&config.antispam);
+                let hostname = config.global.daemon_name.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_smtps_frontend(
+                        listener, p, antispam_pipeline, allow_list, block_list,
+                        hostname, &frontend_name, smtp_headers, fe_rx,
+                    ).await {
+                        tracing::error!(frontend = %frontend_name, error = %e, "SMTPS frontend failed");
+                    }
+                })
+            }
+            ProtocolType::SmtpStarttls => {
+                let listener = TcpListenerTask::new(
+                    frontend.listen.clone(),
+                    frontend.name.clone(),
+                    frontend.max_connections,
+                );
+                let frontend_name = frontend.name.clone();
+                let smtp_headers = frontend.smtp_headers.clone();
+                let p = pipeline.clone();
+                let effective_antispam: std::borrow::Cow<AntispamConfig> =
+                    resolve_antispam_for_profile(
+                        &config.antispam,
+                        frontend.security_profile.as_deref(),
+                        &config.security_profiles,
+                    );
+                let antispam_pipeline = build_antispam_pipeline(&effective_antispam);
+                let allow_list = build_allow_list(&config.antispam);
+                let block_list = build_block_list(&config.antispam);
+                let hostname = config.global.daemon_name.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = run_smtp_starttls_frontend(
+                        listener, p, antispam_pipeline, allow_list, block_list,
+                        hostname, &frontend_name, smtp_headers, fe_rx,
+                    ).await {
+                        tracing::error!(frontend = %frontend_name, error = %e, "SMTP-STARTTLS frontend failed");
+                    }
+                })
+            }
+        };
+
+        fe_shutdowns.insert(frontend.name.clone(), (fe_tx, handle));
+    }
+
+    Ok(())
 }
 
 /// Run a plain TCP frontend: accept connections, check ACL, select backend,
@@ -708,6 +764,146 @@ async fn handle_tcp_connection(
                 );
             }
         }
+    }
+}
+
+/// Run a TLS-terminating TCP frontend: terminate TLS, then proxy raw bytes.
+async fn run_tls_tcp_frontend(
+    listener: TlsListenerTask,
+    pipeline: Arc<RequestPipeline>,
+    frontend_name: &str,
+    shutdown_rx: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let name = frontend_name.to_string();
+
+    listener
+        .run(
+            move |tls_stream: TlsStream<TcpStream>,
+                  peer_addr: SocketAddr,
+                  _local_addr: SocketAddr,
+                  _sni: Option<String>,
+                  _ja3: Option<String>| {
+                let pipeline = pipeline.clone();
+                let name = name.clone();
+
+                async move {
+                    handle_tls_tcp_connection(tls_stream, peer_addr, &pipeline, &name).await;
+                }
+            },
+            shutdown_rx,
+        )
+        .await
+}
+
+/// Handle a single TLS-terminated TCP proxy connection.
+async fn handle_tls_tcp_connection(
+    client_stream: TlsStream<TcpStream>,
+    peer_addr: SocketAddr,
+    pipeline: &RequestPipeline,
+    frontend_name: &str,
+) {
+    // Check ACL
+    if let Err(e) = pipeline.check_acl(peer_addr.ip()) {
+        tracing::debug!(
+            frontend = %frontend_name,
+            client = %peer_addr,
+            error = %e,
+            "TLS TCP connection denied by ACL",
+        );
+        return;
+    }
+
+    // Select backend
+    let (backend, _guard) = match pipeline.select_backend(peer_addr.ip()) {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::warn!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                error = %e,
+                "no backend available",
+            );
+            return;
+        }
+    };
+
+    // Connect to backend (TLS or plain)
+    if backend.tls {
+        match pipeline.connect_backend_tls(&backend).await {
+            Ok(backend_stream) => {
+                let start = std::time::Instant::now();
+                match TcpProxy::proxy(client_stream, backend_stream).await {
+                    Ok((c2b, b2c)) => tracing::info!(
+                        frontend = %frontend_name,
+                        client = %peer_addr,
+                        backend_tag = %backend.tag,
+                        bytes_in = c2b,
+                        bytes_out = b2c,
+                        duration_secs = start.elapsed().as_secs_f64(),
+                        "TLS TCP proxy session completed",
+                    ),
+                    Err(e) if e.kind() != std::io::ErrorKind::ConnectionReset
+                        && e.kind() != std::io::ErrorKind::BrokenPipe =>
+                    {
+                        tracing::debug!(
+                            frontend = %frontend_name,
+                            client = %peer_addr,
+                            backend_tag = %backend.tag,
+                            error = %e,
+                            "TLS TCP proxy I/O error",
+                        );
+                    }
+                    Err(_) => {}
+                }
+            }
+            Err(e) => tracing::warn!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                error = %e,
+                "failed to connect to TLS backend",
+            ),
+        }
+        return;
+    }
+
+    let backend_stream = match RequestPipeline::connect_backend(&backend).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                error = %e,
+                "failed to connect to backend",
+            );
+            return;
+        }
+    };
+
+    let start = std::time::Instant::now();
+    match TcpProxy::proxy(client_stream, backend_stream).await {
+        Ok((c2b, b2c)) => tracing::info!(
+            frontend = %frontend_name,
+            client = %peer_addr,
+            backend_tag = %backend.tag,
+            bytes_in = c2b,
+            bytes_out = b2c,
+            duration_secs = start.elapsed().as_secs_f64(),
+            "TLS TCP proxy session completed",
+        ),
+        Err(e) if e.kind() != std::io::ErrorKind::ConnectionReset
+            && e.kind() != std::io::ErrorKind::BrokenPipe =>
+        {
+            tracing::debug!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                error = %e,
+                "TLS TCP proxy I/O error",
+            );
+        }
+        Err(_) => {}
     }
 }
 

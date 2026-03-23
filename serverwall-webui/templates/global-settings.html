@@ -1,24 +1,13 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ServerWall - Global Settings</title>
-<link rel="stylesheet" href="/ui/app.css">
+{% extends "base.html" %}
+{% block title %}Global Settings{% endblock %}
+{% block head_extra %}
 <style>
 .save-row{margin-top:1.2rem;display:flex;gap:.6rem;align-items:center}
 .save-ok{color:var(--success,#4ade80);font-size:.82rem;display:none}
 .save-err{color:var(--danger,#f87171);font-size:.82rem;display:none}
 </style>
-</head>
-<body>
-<div id="topbar">
-  <span class="brand">ServerWall</span>
-  <button id="logoutBtn">Logout</button>
-</div>
-<div id="layout">
-  <div id="sidebar"></div>
-  <div id="main">
+{% endblock %}
+{% block content %}
     <div class="toolbar">
       <h2 style="margin:0;flex:1">Global Settings</h2>
     </div>
@@ -75,10 +64,8 @@
         <span class="save-err" id="saveErr"></span>
       </div>
     </div>
-
-  </div>
-</div>
-<script src="/ui/app.js"></script>
+{% endblock %}
+{% block scripts %}
 <script>
 async function load() {
   try {
@@ -138,5 +125,4 @@ async function save() {
 initPage('global-settings');
 load();
 </script>
-</body>
-</html>
+{% endblock %}

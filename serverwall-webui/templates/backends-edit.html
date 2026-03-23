@@ -2,9 +2,9 @@
 {% block title %}Edit Backend Pool{% endblock %}
 {% block head_extra %}
 <style>
-.member-row{display:grid;grid-template-columns:1rem 2fr 1.5fr 0.7fr auto auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
+.member-row{display:grid;grid-template-columns:1rem 2fr 1fr 0.5fr 5.5rem 4rem 3rem auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
 .member-row input,.member-row select{padding:.35rem .5rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:.85rem}
-.member-header{display:grid;grid-template-columns:1rem 2fr 1.5fr 0.7fr auto auto auto;gap:.5rem;margin-bottom:.3rem;font-size:.75rem;color:var(--muted)}
+.member-header{display:grid;grid-template-columns:1rem 2fr 1fr 0.5fr 5.5rem 4rem 3rem auto auto;gap:.5rem;margin-bottom:.3rem;font-size:.75rem;color:var(--muted)}
 .status-dot{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:var(--muted);cursor:default;flex-shrink:0}
 .status-dot.ok{background:#22c55e}
 .status-dot.err{background:#ef4444}
@@ -40,6 +40,13 @@
           <label>Health Check Timeout</label>
           <input type="text" id="pHcTimeout" placeholder="3s">
         </div>
+        <div class="form-group" id="hcMethodGroup">
+          <label>Health Check Method</label>
+          <select id="pHcMethod">
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+          </select>
+        </div>
         <div class="form-group" id="hcPathGroup">
           <label>Health Check Path</label>
           <input type="text" id="pHcPath" placeholder="/health">
@@ -61,7 +68,7 @@
           <button type="button" class="btn btn-secondary btn-sm" onclick="addMemberRow()">+ Add Member</button>
         </div>
         <div class="member-header">
-          <span></span><span>Address *</span><span>Name</span><span>Weight</span><span>TLS</span><span>Enabled</span><span></span>
+          <span></span><span>Address *</span><span>Name</span><span>Wt</span><span>TLS</span><span>SNI</span><span>Max</span><span>Enabled</span><span></span>
         </div>
         <div id="memberRows"></div>
       </div>
@@ -100,6 +107,7 @@ async function loadPool() {
     document.getElementById('pHcType').value     = p.health_check_type    || 'http';
     document.getElementById('pHcInterval').value = p.health_check_interval|| '10s';
     document.getElementById('pHcTimeout').value  = p.health_check_timeout || '3s';
+    document.getElementById('pHcMethod').value   = p.health_check_method  || 'GET';
     document.getElementById('pHcPath').value     = p.health_check_path    || '';
     document.getElementById('pHcExpect').value   = p.health_check_expect  != null ? p.health_check_expect : 200;
     document.getElementById('pHcTls').checked        = !!p.health_check_tls;
@@ -123,8 +131,14 @@ function addMemberRow(b) {
   var addr    = b ? b.address : '';
   var name    = b ? (b.name || '') : '';
   var weight  = b ? (b.weight != null ? b.weight : 1) : 1;
-  var tls     = b ? !!b.tls : false;
   var enabled = b ? (b.enabled !== false) : true;
+  var sni     = b ? (b.tls_sni || '') : '';
+  var maxConn = b ? (b.max_connections || '') : '';
+  // Determine TLS mode from tls + tls_verify fields
+  var tlsMode = 'off';
+  if (b && b.tls) {
+    tlsMode = (b.tls_verify === false) ? 'on_skip' : 'on';
+  }
 
   var row = document.createElement('div');
   row.className = 'member-row';
@@ -133,8 +147,14 @@ function addMemberRow(b) {
     '<span class="status-dot" id="mdot-'+i+'" title="' + (addr ? 'Checking...' : '') + '"></span>' +
     '<input type="text" id="mAddr'+i+'" placeholder="host:port" value="'+escAttr(addr)+'">' +
     '<input type="text" id="mName'+i+'" placeholder="(optional)" value="'+escAttr(name)+'">' +
-    '<input type="number" id="mWeight'+i+'" value="'+weight+'" min="1">' +
-    '<label class="form-check" style="white-space:nowrap"><input type="checkbox" id="mTls'+i+'"'+(tls?' checked':'')+'> TLS</label>' +
+    '<input type="number" id="mWeight'+i+'" value="'+weight+'" min="1" style="width:100%">' +
+    '<select id="mTlsMode'+i+'" style="font-size:.78rem">' +
+      '<option value="off"'+(tlsMode==='off'?' selected':'')+'>No TLS</option>' +
+      '<option value="on"'+(tlsMode==='on'?' selected':'')+'>TLS+Verify</option>' +
+      '<option value="on_skip"'+(tlsMode==='on_skip'?' selected':'')+'>TLS (skip)</option>' +
+    '</select>' +
+    '<input type="text" id="mSni'+i+'" placeholder="hostname" value="'+escAttr(sni)+'" style="font-size:.78rem">' +
+    '<input type="number" id="mMaxConn'+i+'" value="'+escAttr(maxConn)+'" placeholder="∞" min="1" style="font-size:.78rem;width:100%">' +
     '<label class="form-check" style="white-space:nowrap"><input type="checkbox" id="mEnabled'+i+'"'+(enabled?' checked':'')+'> On</label>' +
     '<button type="button" class="btn btn-danger btn-sm" onclick="removeMemberRow('+i+')" style="padding:.2rem .45rem">&#x2715;</button>';
   document.getElementById('memberRows').appendChild(row);
@@ -154,6 +174,7 @@ async function savePool() {
     health_check_type:     document.getElementById('pHcType').value,
     health_check_interval: document.getElementById('pHcInterval').value.trim() || '10s',
     health_check_timeout:  document.getElementById('pHcTimeout').value.trim()  || '3s',
+    health_check_method:   document.getElementById('pHcMethod').value,
     health_check_expect:   parseInt(document.getElementById('pHcExpect').value) || 200,
     health_check_tls:        document.getElementById('pHcTls').checked,
     health_check_ignore_cert: document.getElementById('pHcIgnoreCert').checked,
@@ -169,13 +190,21 @@ async function savePool() {
     if (!addrEl) return;
     var addr = addrEl.value.trim();
     if (!addr) return;
-    body.backend.push({
+    var tlsMode = document.getElementById('mTlsMode' + i).value;
+    var entry = {
       name:    document.getElementById('mName'+i).value.trim() || addr,
       address: addr,
       weight:  parseInt(document.getElementById('mWeight'+i).value) || 1,
-      tls:     document.getElementById('mTls'+i).checked,
+      tls:     tlsMode !== 'off',
       enabled: document.getElementById('mEnabled'+i).checked,
-    });
+    };
+    if (tlsMode === 'on') entry.tls_verify = true;
+    if (tlsMode === 'on_skip') entry.tls_verify = false;
+    var sni = document.getElementById('mSni'+i).value.trim();
+    if (sni) entry.tls_sni = sni;
+    var maxConn = parseInt(document.getElementById('mMaxConn'+i).value);
+    if (maxConn > 0) entry.max_connections = maxConn;
+    body.backend.push(entry);
   });
 
   try {
@@ -227,7 +256,7 @@ function showError(msg) {
 
 function updateHcFields() {
   var isHttp = document.getElementById('pHcType').value === 'http';
-  ['hcPathGroup','hcExpectGroup','hcTlsGroup'].forEach(function(id) {
+  ['hcMethodGroup','hcPathGroup','hcExpectGroup','hcTlsGroup'].forEach(function(id) {
     document.getElementById(id).style.display = isHttp ? '' : 'none';
   });
 }

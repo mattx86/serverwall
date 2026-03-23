@@ -151,7 +151,7 @@ impl SmtpProxy {
 
                     // Respond with capabilities.
                     let response = format!(
-                        "250-{}\r\n250-PIPELINING\r\n250-SIZE 26214400\r\n250-STARTTLS\r\n250 8BITMIME\r\n",
+                        "250-{}\r\n250-PIPELINING\r\n250-SIZE 26214400\r\n250-ENHANCEDSTATUSCODES\r\n250 8BITMIME\r\n",
                         self.hostname,
                     );
                     let writer = client_reader.get_mut();

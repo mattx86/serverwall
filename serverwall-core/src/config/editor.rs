@@ -6,7 +6,7 @@ use crate::config::schema::{
     CookieSecurityConfig, DkimDomainConfig, DmarcPolicyDomain, DnsblListEntry, DomainOverride,
     FrontendConfig, GeoConfig, GlobalConfig, LogProfile, RateLimitConfig, RelayConfig,
     ScannerConfig, SecurityHeadersConfig, SecurityProfile, SecurityTlsConfig, SpfDomainConfig,
-    TlsProfile, WafRulesetConfig,
+    WafRulesetConfig,
 };
 use crate::config::writer::write_config_atomic;
 use crate::error::{Result, ServerWallError};
@@ -758,38 +758,6 @@ pub fn remove_security_profile(path: &Path, name: &str) -> Result<()> {
     config.security_profiles.retain(|p| p.name != name);
     if config.security_profiles.len() == before {
         return Err(ServerWallError::Config(format!("Security profile '{}' not found", name)));
-    }
-    validate_config(&config)?;
-    write_config_atomic(path, &config)
-}
-
-pub fn add_tls_profile(path: &Path, profile: TlsProfile) -> Result<()> {
-    let mut config = load_config(path)?;
-    if config.tls_profiles.iter().any(|p| p.name == profile.name) {
-        return Err(ServerWallError::Config(format!(
-            "TLS profile '{}' already exists", profile.name
-        )));
-    }
-    config.tls_profiles.push(profile);
-    validate_config(&config)?;
-    write_config_atomic(path, &config)
-}
-
-pub fn update_tls_profile(path: &Path, name: &str, profile: TlsProfile) -> Result<()> {
-    let mut config = load_config(path)?;
-    let pos = config.tls_profiles.iter().position(|p| p.name == name)
-        .ok_or_else(|| ServerWallError::Config(format!("TLS profile '{}' not found", name)))?;
-    config.tls_profiles[pos] = profile;
-    validate_config(&config)?;
-    write_config_atomic(path, &config)
-}
-
-pub fn remove_tls_profile(path: &Path, name: &str) -> Result<()> {
-    let mut config = load_config(path)?;
-    let before = config.tls_profiles.len();
-    config.tls_profiles.retain(|p| p.name != name);
-    if config.tls_profiles.len() == before {
-        return Err(ServerWallError::Config(format!("TLS profile '{}' not found", name)));
     }
     validate_config(&config)?;
     write_config_atomic(path, &config)

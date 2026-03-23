@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Security Profiles{% endblock %}
+{% block title %}Frontend Profiles{% endblock %}
 {% block head_extra %}
 <style>
 .tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1rem}
@@ -23,17 +23,18 @@
 {% block content %}
 
     <div class="toolbar" id="spToolbar">
-      <h2 style="margin:0;flex:1">Security Profiles</h2>
+      <h2 style="margin:0;flex:1">Frontend Profiles</h2>
       <button class="btn btn-primary" id="addSpBtn" onclick="showAddForm()">+ Add Profile</button>
     </div>
 
     <!-- Add / Edit form -->
     <div id="spForm" class="form-panel" style="display:none">
-      <h3 id="spFormTitle">Add Security Profile</h3>
+      <h3 id="spFormTitle">Add Frontend Profile</h3>
       <input type="hidden" id="spOrigName">
 
       <div class="tabs" id="spTabs">
         <div class="tab active" onclick="spTab('general')">General</div>
+        <div class="tab" onclick="spTab('tls')">TLS</div>
         <div class="tab" onclick="spTab('headers')">HTTP Headers</div>
         <div class="tab" onclick="spTab('cookies')">Cookies</div>
         <div class="tab" onclick="spTab('bot')">Bot Detection</div>
@@ -72,6 +73,41 @@
             <div class="toggle-sub">Enable Web Application Firewall for frontends using this profile</div>
           </div>
           <label class="switch"><input type="checkbox" id="spWafEnabled"><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <!-- TLS -->
+      <div id="sptab-tls" class="tab-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Minimum TLS Version</label>
+            <select id="spMinVersion">
+              <option value="1.2">TLS 1.2+</option>
+              <option value="1.3">TLS 1.3 only</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>HSTS Max-Age (seconds, blank = disabled)</label>
+            <input type="number" id="spHstsMaxAge" min="0" placeholder="31536000">
+          </div>
+        </div>
+        <div class="form-group" style="max-width:640px">
+          <label>Cipher Suites (one per line, blank = rustls defaults)</label>
+          <textarea id="spCiphers" rows="9" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="TLS_AES_256_GCM_SHA384&#10;TLS_AES_128_GCM_SHA256&#10;TLS_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"></textarea>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">HSTS Include Subdomains</div>
+            <div class="toggle-sub">Extend HSTS policy to all subdomains</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spHstsSubs"><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">OCSP Stapling</div>
+            <div class="toggle-sub">Fetch and attach OCSP certificate status at startup</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="spOcsp"><span class="slider"></span></label>
         </div>
       </div>
 
@@ -341,6 +377,18 @@
 <script>
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 
+var STRONG_CIPHERS = [
+  'TLS_AES_256_GCM_SHA384',
+  'TLS_AES_128_GCM_SHA256',
+  'TLS_CHACHA20_POLY1305_SHA256',
+  'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
+  'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+  'TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256',
+  'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384',
+  'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+  'TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256',
+].join('\n');
+
 // ─── Per-profile mutable state ────────────────────────────────────────────────
 var spBotGoodBots     = [];
 var spJa3Fingerprints = [];
@@ -351,12 +399,12 @@ var _spScanners       = [];
 // ─── Tab switching (within the form) ──────────────────────────────────────────
 // Tabs visible per profile type
 var SP_TYPE_TABS = {
-  HTTP: ['general','headers','cookies','bot','geo'],
-  SMTP: ['general','antispam','bot','geo'],
-  IMAP: ['general','bot','geo'],
-  TCP:  ['general','geo'],
+  HTTP: ['general','tls','headers','cookies','bot','geo'],
+  SMTP: ['general','tls','antispam','bot','geo'],
+  IMAP: ['general','tls','bot','geo'],
+  TCP:  ['general','tls','geo'],
 };
-var ALL_SP_TABS = ['general','headers','cookies','bot','geo','antispam'];
+var ALL_SP_TABS = ['general','tls','headers','cookies','bot','geo','antispam'];
 
 function onProfileTypeChange() {
   var type    = document.getElementById('spProfileType').value;
@@ -490,7 +538,7 @@ async function loadWafRulesets(current) {
 // ─── Show/hide ────────────────────────────────────────────────────────────────
 function showAddForm() {
   clearForm();
-  document.getElementById('spFormTitle').textContent = 'Add Security Profile';
+  document.getElementById('spFormTitle').textContent = 'Add Frontend Profile';
   document.getElementById('spOrigName').value = '';
   document.getElementById('spName').disabled = false;
   document.getElementById('spTable').style.display = 'none';
@@ -505,7 +553,7 @@ function showAddForm() {
 
 function showEditForm(p) {
   clearForm();
-  document.getElementById('spFormTitle').textContent = 'Edit Profile: ' + p.name;
+  document.getElementById('spFormTitle').textContent = 'Edit Frontend Profile: ' + p.name;
   document.getElementById('spOrigName').value = p.name;
   document.getElementById('spName').value    = p.name;
   document.getElementById('spName').disabled = true;
@@ -570,6 +618,14 @@ function showEditForm(p) {
   }
   spRenderScanners();
 
+  // TLS
+  setSelectVal('spMinVersion', p.min_version || '1.2');
+  var cs = p.cipher_suites || [];
+  document.getElementById('spCiphers').value = cs.length ? cs.join('\n') : STRONG_CIPHERS;
+  document.getElementById('spHstsMaxAge').value = p.hsts_max_age != null ? p.hsts_max_age : '';
+  document.getElementById('spHstsSubs').checked = !!p.hsts_include_subdomains;
+  document.getElementById('spOcsp').checked     = !!p.ocsp_stapling;
+
   document.getElementById('spTable').style.display = 'none';
   document.getElementById('addSpBtn').style.display = 'none';
   document.getElementById('spForm').style.display = '';
@@ -620,6 +676,12 @@ function clearForm() {
   setSelectVal('spAvTimeoutSel', 'pass');
   _spScanners = [];
   spRenderScanners();
+  // TLS
+  setSelectVal('spMinVersion', '1.2');
+  document.getElementById('spCiphers').value    = STRONG_CIPHERS;
+  document.getElementById('spHstsMaxAge').value = '';
+  document.getElementById('spHstsSubs').checked = false;
+  document.getElementById('spOcsp').checked     = false;
 }
 
 function setSelectVal(id, val) {
@@ -711,6 +773,11 @@ async function submitProfile() {
       block_countries: spBlockCountries,
       allow_countries: spAllowCountries,
     },
+    min_version:             document.getElementById('spMinVersion').value,
+    cipher_suites:           (function(){ var v = document.getElementById('spCiphers').value.trim(); return v ? v.split('\n').map(function(s){return s.trim()}).filter(Boolean) : []; })(),
+    hsts_max_age:            (function(){ var v = document.getElementById('spHstsMaxAge').value.trim(); return v ? parseInt(v) : null; })(),
+    hsts_include_subdomains: document.getElementById('spHstsSubs').checked,
+    ocsp_stapling:           document.getElementById('spOcsp').checked,
     antispam: document.getElementById('spAsOverride').checked ? {
       enabled:                  document.getElementById('spAsEnabled').checked,
       possible_spam_threshold:  document.getElementById('spAsPossible').value !== ''
@@ -753,7 +820,7 @@ async function deleteProfile(name) {
   } catch(e) { alert('Request failed'); }
 }
 
-initPage('security-profiles');
+initPage('profiles');
 loadProfiles();
 </script>
 {% endblock %}

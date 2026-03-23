@@ -6,7 +6,7 @@
 .pool-header strong{flex:1;font-size:.95rem}
 .pool-block{margin-bottom:1.2rem}
 .pool-block table{border-radius:0 0 6px 6px;margin-bottom:0}
-.member-row{display:grid;grid-template-columns:2fr 1.5fr 0.7fr auto auto auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
+.member-row{display:grid;grid-template-columns:2fr 1fr 0.5fr 5.5rem 4rem 3rem auto auto;gap:.5rem;align-items:center;margin-bottom:.4rem}
 .member-row input,.member-row select{padding:.35rem .5rem;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:.85rem}
 .member-row label{font-size:.82rem;color:var(--muted)}
 .status-dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;background:var(--muted);vertical-align:middle;margin-right:.3rem;cursor:default;flex-shrink:0}
@@ -31,7 +31,7 @@
         </div>
         <div class="form-group">
           <label>Health Check Type</label>
-          <select id="pHcType">
+          <select id="pHcType" onchange="toggleHcFields()">
             <option value="http">HTTP</option>
             <option value="smtp">SMTP</option>
             <option value="imap">IMAP</option>
@@ -46,16 +46,23 @@
           <label>Health Check Timeout</label>
           <input type="text" id="pHcTimeout" value="3s" placeholder="3s">
         </div>
-        <div class="form-group">
+        <div class="form-group" id="pHcMethodGroup">
+          <label>Health Check Method</label>
+          <select id="pHcMethod">
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+          </select>
+        </div>
+        <div class="form-group" id="pHcPathGroup">
           <label>Health Check Path (HTTP)</label>
           <input type="text" id="pHcPath" placeholder="/health">
         </div>
-        <div class="form-group">
+        <div class="form-group" id="pHcExpectGroup">
           <label>Expected HTTP Status</label>
           <input type="number" id="pHcExpect" value="200" min="100" max="599">
         </div>
       </div>
-      <div style="margin-top:.8rem;display:flex;gap:1.2rem;flex-wrap:wrap">
+      <div style="margin-top:.8rem;display:flex;gap:1.2rem;flex-wrap:wrap" id="pHcTlsGroup">
         <label class="form-check"><input type="checkbox" id="pHcTls"> HC TLS</label>
         <label class="form-check"><input type="checkbox" id="pHcIgnoreCert"> HC Ignore Cert</label>
       </div>
@@ -65,8 +72,8 @@
           <span style="font-size:.8rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.05em">Pool Members</span>
           <button type="button" class="btn btn-secondary btn-sm" onclick="addMemberRow()">+ Add Member</button>
         </div>
-        <div style="font-size:.75rem;color:var(--muted);margin-bottom:.4rem;display:grid;grid-template-columns:2fr 1.5fr 0.7fr auto auto auto auto;gap:.5rem">
-          <span>Address *</span><span>Name</span><span>Weight</span><span>TLS</span><span>Enabled</span><span></span>
+        <div style="font-size:.75rem;color:var(--muted);margin-bottom:.4rem;display:grid;grid-template-columns:2fr 1fr 0.5fr 5.5rem 4rem 3rem auto auto;gap:.5rem">
+          <span>Address *</span><span>Name</span><span>Wt</span><span>TLS</span><span>SNI</span><span>Max</span><span>Enabled</span><span></span>
         </div>
         <div id="memberRows"></div>
       </div>
@@ -91,6 +98,13 @@
 <script>
 var memberCount = 0;
 
+function toggleHcFields() {
+  var isHttp = document.getElementById('pHcType').value === 'http';
+  ['pHcMethodGroup','pHcPathGroup','pHcExpectGroup','pHcTlsGroup'].forEach(function(id) {
+    document.getElementById(id).style.display = isHttp ? '' : 'none';
+  });
+}
+
 function showPoolForm() {
   document.getElementById('addPoolForm').style.display = '';
   document.getElementById('poolTable').style.display = 'none';
@@ -98,6 +112,7 @@ function showPoolForm() {
   document.getElementById('pError').style.display = 'none';
   memberCount = 0;
   document.getElementById('memberRows').innerHTML = '';
+  toggleHcFields();
   addMemberRow();
 }
 function hidePoolForm() {
@@ -114,10 +129,16 @@ function addMemberRow() {
   row.innerHTML =
     '<input type="text" id="mAddr'+i+'" placeholder="host:port">' +
     '<input type="text" id="mName'+i+'" placeholder="(optional)">' +
-    '<input type="number" id="mWeight'+i+'" value="1" min="1">' +
-    '<label class="form-check" style="white-space:nowrap"><input type="checkbox" id="mTls'+i+'"> TLS</label>' +
+    '<input type="number" id="mWeight'+i+'" value="1" min="1" style="width:100%">' +
+    '<select id="mTlsMode'+i+'" style="font-size:.78rem">' +
+      '<option value="off">No TLS</option>' +
+      '<option value="on">TLS+Verify</option>' +
+      '<option value="on_skip">TLS (skip)</option>' +
+    '</select>' +
+    '<input type="text" id="mSni'+i+'" placeholder="hostname" style="font-size:.78rem">' +
+    '<input type="number" id="mMaxConn'+i+'" placeholder="∞" min="1" style="font-size:.78rem;width:100%">' +
     '<label class="form-check" style="white-space:nowrap"><input type="checkbox" id="mEnabled'+i+'" checked> On</label>' +
-    '<button type="button" class="btn btn-danger btn-sm" onclick="removeMemberRow('+i+')" style="padding:.2rem .45rem">✕</button>';
+    '<button type="button" class="btn btn-danger btn-sm" onclick="removeMemberRow('+i+')" style="padding:.2rem .45rem">&#x2715;</button>';
   document.getElementById('memberRows').appendChild(row);
 }
 
@@ -197,11 +218,13 @@ async function submitPool() {
   var errEl = document.getElementById('pError');
   if (!name) { errEl.textContent = 'Pool name is required.'; errEl.style.display = ''; return; }
 
+  var hcType = document.getElementById('pHcType').value;
   var body = {
     name: name,
-    health_check_type: document.getElementById('pHcType').value,
+    health_check_type: hcType,
     health_check_interval: document.getElementById('pHcInterval').value.trim() || '10s',
     health_check_timeout:  document.getElementById('pHcTimeout').value.trim()  || '3s',
+    health_check_method: document.getElementById('pHcMethod').value,
     health_check_expect: parseInt(document.getElementById('pHcExpect').value) || 200,
     health_check_tls: document.getElementById('pHcTls').checked,
     health_check_ignore_cert: document.getElementById('pHcIgnoreCert').checked,
@@ -218,13 +241,21 @@ async function submitPool() {
     if (!addrEl) return;
     var addr = addrEl.value.trim();
     if (!addr) return;
-    body.backend.push({
+    var tlsMode = document.getElementById('mTlsMode' + i).value;
+    var entry = {
       name: document.getElementById('mName' + i).value.trim() || addr,
       address: addr,
       weight: parseInt(document.getElementById('mWeight' + i).value) || 1,
-      tls: document.getElementById('mTls' + i).checked,
+      tls: tlsMode !== 'off',
       enabled: document.getElementById('mEnabled' + i).checked,
-    });
+    };
+    if (tlsMode === 'on') entry.tls_verify = true;
+    if (tlsMode === 'on_skip') entry.tls_verify = false;
+    var sni = document.getElementById('mSni' + i).value.trim();
+    if (sni) entry.tls_sni = sni;
+    var maxConn = parseInt(document.getElementById('mMaxConn' + i).value);
+    if (maxConn > 0) entry.max_connections = maxConn;
+    body.backend.push(entry);
   });
 
   try {

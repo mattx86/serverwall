@@ -19,23 +19,24 @@ var NAV_ITEMS = [
     {id:'certs-generate', label:'Generate',      href:'/ui/certificates-generate.html'},
     {id:'certs-acme',     label:"Let's Encrypt", href:'/ui/certificates-acme.html'},
   ]},
-  {id:'waf',       label:'WAF Rulesets', href:'/ui/waf.html'},
-  {id:'acl',       label:'IP ACL',       href:'/ui/acl.html'},
-  {id:'security',          label:'Security',          href:'/ui/security.html'},
-  {id:'security-profiles', label:'Security Profiles', href:'/ui/security-profiles.html'},
-  {id:'tls-profiles',      label:'TLS Profiles',      href:'/ui/tls-profiles.html'},
-  {id:'log-profiles',      label:'Logging Profiles',  href:'/ui/log-profiles.html'},
-  {id:'antispam',          label:'Antispam',          href:'/ui/antispam.html'},
-  {id:'relay',             label:'Relay',             href:'/ui/relay.html'},
-  {id:'email-auth', label:'Email Auth', href:'/ui/dkim.html', children:[
-    {id:'dkim',  label:'DKIM Keys',     href:'/ui/dkim.html'},
-    {id:'dmarc', label:'DMARC Policy',  href:'/ui/dmarc.html'},
-    {id:'spf',   label:'SPF Records',   href:'/ui/spf.html'},
+  {id:'acl',          label:'IP ACL',          href:'/ui/acl.html'},
+  {id:'log-profiles', label:'Logging Profiles',href:'/ui/log-profiles.html'},
+  {id:'http', label:'HTTP', href:'/ui/waf.html', children:[
+    {id:'waf',      label:'WAF Rulesets',      href:'/ui/waf.html'},
+    {id:'security', label:'Security',           href:'/ui/security.html'},
+    {id:'profiles', label:'Frontend Profiles',  href:'/ui/security-profiles.html'},
+  ]},
+  {id:'email', label:'Email', href:'/ui/antispam.html', children:[
+    {id:'antispam', label:'Antispam',   href:'/ui/antispam.html'},
+    {id:'relay',    label:'Relay',      href:'/ui/relay.html'},
+    {id:'queue',    label:'Mail Queue', href:'/ui/queue.html'},
+    {id:'dkim',     label:'DKIM',       href:'/ui/dkim.html'},
+    {id:'dmarc',    label:'DMARC',      href:'/ui/dmarc.html'},
+    {id:'spf',      label:'SPF',        href:'/ui/spf.html'},
   ]},
   {id:'logs',      label:'Logs',         href:'/ui/logs.html'},
-  {id:'queue',     label:'Mail Queue',   href:'/ui/queue.html', navId:'nav-queue'},
   {id:'settings', label:'Settings', href:'/ui/global-settings.html', children:[
-    {id:'global-settings', label:'Global',           href:'/ui/global-settings.html'},
+    {id:'global-settings', label:'Global',               href:'/ui/global-settings.html'},
     {id:'acme-settings',   label:"ACME / Let's Encrypt", href:'/ui/acme-settings.html'},
   ]},
 ];
@@ -48,7 +49,9 @@ function buildNav(activePage) {
     var id    = item.navId ? ' id="'+item.navId+'"' : '';
     var style = item.navId ? ' style="display:none"' : '';
     if (item.children) {
-      var groupActive = activePage === item.id || activePage.indexOf(item.id + '-') === 0;
+      var groupActive = activePage === item.id
+          || activePage.indexOf(item.id + '-') === 0
+          || item.children.some(function(c) { return c.id === activePage; });
       var cls = groupActive ? ' class="active"' : '';
       html += '<a href="'+item.href+'"'+cls+id+style+'>'+item.label+'</a>';
       if (groupActive) {
@@ -84,8 +87,6 @@ async function checkSmtpFrontends() {
       return f.protocol === 'smtps' || f.protocol === 'smtpstarttls';
     });
     if (hasSmtp) {
-      var el = document.getElementById('nav-queue');
-      if (el) el.style.display = '';
       var card = document.getElementById('cardQueue');
       if (card) card.style.display = '';
     }

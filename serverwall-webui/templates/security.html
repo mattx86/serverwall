@@ -79,7 +79,7 @@
         </div>
         <div class="form-group" style="margin-top:1rem;max-width:640px">
           <label>Allowed Cipher Suites (one per line, blank = rustls defaults)</label>
-          <textarea id="tlsCiphers" rows="4" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="TLS_AES_256_GCM_SHA384&#10;TLS_CHACHA20_POLY1305_SHA256"></textarea>
+          <textarea id="tlsCiphers" rows="9" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="TLS_AES_256_GCM_SHA384&#10;TLS_AES_128_GCM_SHA256&#10;TLS_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"></textarea>
         </div>
         <div class="save-row">
           <button class="btn btn-primary" onclick="saveTls()">Save TLS Settings</button>

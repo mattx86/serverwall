@@ -9,7 +9,7 @@ use tokio_rustls::server::TlsStream;
 use serverwall_core::acl::{AccessControlEngine, GeoEngine};
 use serverwall_core::balancer::{IpHash, LeastConnections, LoadBalancer, RoundRobin};
 use serverwall_core::config::schema::{
-    BalanceMethod, ServerWallConfig, ProtocolType,
+    BalanceMethod, LogFormat, ServerWallConfig, ProtocolType,
 };
 use serverwall_core::health::HealthChecker;
 use serverwall_core::tls::{CertStore, build_tls_acceptor, staple_certified_key};
@@ -40,6 +40,8 @@ use serverwall_relay::queue::{FilesystemSpool, RetryScheduler};
 use serverwall_relay::receiver::SmtpReceiver;
 use serverwall_relay::trusted_hosts::TrustedHosts;
 
+use tokio::io::AsyncWriteExt;
+
 use crate::listener::TcpListenerTask;
 use crate::listener::TlsListenerTask;
 use crate::pipeline::RequestPipeline;
@@ -48,6 +50,8 @@ use crate::proxy::ImapProxy;
 use crate::proxy::SmtpProxy;
 use crate::proxy::TcpProxy;
 use crate::reload::ReloadHandler;
+
+type LogWriter = Arc<tokio::sync::Mutex<tokio::io::BufWriter<tokio::fs::File>>>;
 
 /// Orchestrates all listeners, proxies, and health checkers.
 pub struct Server {
@@ -294,6 +298,46 @@ async fn apply_config(
 
         let handle = match frontend.protocol {
             ProtocolType::Tcp => {
+                // Resolve log settings (profile takes precedence for format/access_log;
+                // log_file always comes from the frontend directly).
+                let (eff_log_format, eff_access_log, eff_log_file) =
+                    if let Some(ref pname) = frontend.log_profile {
+                        match config.log_profiles.iter().find(|p| p.name == *pname) {
+                            Some(p) => (p.format, p.access_log, frontend.log_file.clone()),
+                            None => {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    profile  = %pname,
+                                    "log profile not found; falling back to inline settings",
+                                );
+                                (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                            }
+                        }
+                    } else {
+                        (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                    };
+
+                let tcp_log_writer: Option<LogWriter> = if eff_access_log {
+                    if let Some(ref path) = eff_log_file {
+                        match tokio::fs::OpenOptions::new()
+                            .create(true).append(true).open(path).await
+                        {
+                            Ok(file) => Some(Arc::new(tokio::sync::Mutex::new(
+                                tokio::io::BufWriter::new(file),
+                            ))),
+                            Err(e) => {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    path = %path,
+                                    error = %e,
+                                    "cannot open access log file — logging disabled for this frontend",
+                                );
+                                None
+                            }
+                        }
+                    } else { None }
+                } else { None };
+
                 // If TLS cert fields are set, terminate TLS before proxying.
                 if frontend.tls_cert.is_some() || frontend.tls_pfx.is_some() {
                     let cert_store = Arc::new(CertStore::new());
@@ -312,7 +356,7 @@ async fn apply_config(
                     let frontend_name = frontend.name.clone();
                     let p = pipeline.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = run_tls_tcp_frontend(listener, p, &frontend_name, fe_rx).await {
+                        if let Err(e) = run_tls_tcp_frontend(listener, p, &frontend_name, tcp_log_writer, eff_log_format, fe_rx).await {
                             tracing::error!(frontend = %frontend_name, error = %e, "TLS TCP frontend failed");
                         }
                     })
@@ -326,7 +370,7 @@ async fn apply_config(
                     let frontend_name = frontend.name.clone();
                     let p = pipeline.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = run_tcp_frontend(listener, p, &frontend_name, fe_rx).await {
+                        if let Err(e) = run_tcp_frontend(listener, p, &frontend_name, tcp_log_writer, eff_log_format, fe_rx).await {
                             tracing::error!(frontend = %frontend_name, error = %e, "TCP frontend failed");
                         }
                     })
@@ -359,16 +403,16 @@ async fn apply_config(
                 let certified_key = CertStore::load_from_frontend(frontend)
                     .map_err(|e| anyhow::anyhow!("TLS error in frontend '{}': {}", frontend.name, e))?;
 
-                // Resolve TLS policy: tls_profile overrides global security.tls.
+                // Resolve TLS policy: security_profile overrides global security.tls.
                 let (eff_hsts_max_age, eff_hsts_subdomains, eff_ocsp, eff_min_version) =
-                    if let Some(ref pname) = frontend.tls_profile {
-                        match config.tls_profiles.iter().find(|p| p.name == *pname) {
+                    if let Some(ref pname) = frontend.security_profile {
+                        match config.security_profiles.iter().find(|p| p.name == *pname) {
                             Some(p) => (p.hsts_max_age, p.hsts_include_subdomains, p.ocsp_stapling, p.min_version.clone()),
                             None => {
                                 tracing::warn!(
                                     frontend = %frontend.name,
                                     profile  = %pname,
-                                    "TLS profile not found; falling back to global settings",
+                                    "security profile not found; falling back to global TLS settings",
                                 );
                                 (
                                     config.security.tls.hsts_max_age,
@@ -616,24 +660,63 @@ async fn apply_config(
     Ok(())
 }
 
+/// Write a single TCP session line to the access log file.
+async fn write_tcp_access_log(
+    log_writer: &Arc<Option<LogWriter>>,
+    log_format: LogFormat,
+    client: &SocketAddr,
+    backend_tag: &str,
+    bytes_in: u64,
+    bytes_out: u64,
+    duration_secs: f64,
+) {
+    if let Some(ref writer) = **log_writer {
+        let line = match log_format {
+            LogFormat::Json => format!(
+                "{{\"time\":\"{}\",\"client\":\"{}\",\"backend\":\"{}\",\"bytes_in\":{},\"bytes_out\":{},\"duration_secs\":{:.3}}}\n",
+                chrono::Utc::now().to_rfc3339(),
+                client,
+                backend_tag,
+                bytes_in,
+                bytes_out,
+                duration_secs,
+            ),
+            _ => format!(
+                "{} - - [{}] \"TCP CONNECT {}\" - {}\n",
+                client.ip(),
+                chrono::Local::now().format("%d/%b/%Y:%H:%M:%S %z"),
+                backend_tag,
+                bytes_in + bytes_out,
+            ),
+        };
+        let mut w = writer.lock().await;
+        let _ = w.write_all(line.as_bytes()).await;
+        let _ = w.flush().await;
+    }
+}
+
 /// Run a plain TCP frontend: accept connections, check ACL, select backend,
 /// and proxy bidirectionally.
 async fn run_tcp_frontend(
     listener: TcpListenerTask,
     pipeline: Arc<RequestPipeline>,
     frontend_name: &str,
+    log_writer: Option<LogWriter>,
+    log_format: LogFormat,
     shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let name = frontend_name.to_string();
+    let log_writer = Arc::new(log_writer);
 
     listener
         .run(
             move |client_stream: TcpStream, peer_addr: SocketAddr, local_addr: SocketAddr| {
                 let pipeline = pipeline.clone();
                 let name = name.clone();
+                let lw = log_writer.clone();
 
                 async move {
-                    handle_tcp_connection(client_stream, peer_addr, local_addr, &pipeline, &name)
+                    handle_tcp_connection(client_stream, peer_addr, local_addr, &pipeline, &name, &lw, log_format)
                         .await;
                 }
             },
@@ -649,6 +732,8 @@ async fn handle_tcp_connection(
     _local_addr: SocketAddr,
     pipeline: &RequestPipeline,
     frontend_name: &str,
+    log_writer: &Arc<Option<LogWriter>>,
+    log_format: LogFormat,
 ) {
     // Check ACL
     if let Err(e) = pipeline.check_acl(peer_addr.ip()) {
@@ -684,15 +769,17 @@ async fn handle_tcp_connection(
                 let start = std::time::Instant::now();
                 match TcpProxy::proxy(client_stream, tls_stream).await {
                     Ok((c2b, b2c)) => {
+                        let dur = start.elapsed().as_secs_f64();
                         tracing::info!(
                             frontend = %frontend_name,
                             client = %peer_addr,
                             backend_tag = %backend.tag,
                             bytes_in = c2b,
                             bytes_out = b2c,
-                            duration_secs = start.elapsed().as_secs_f64(),
+                            duration_secs = dur,
                             "TCP proxy session completed",
                         );
+                        write_tcp_access_log(log_writer, log_format, &peer_addr, &backend.tag, c2b, b2c, dur).await;
                     }
                     Err(e) => {
                         if e.kind() != std::io::ErrorKind::ConnectionReset
@@ -741,15 +828,17 @@ async fn handle_tcp_connection(
     let start = std::time::Instant::now();
     match TcpProxy::proxy(client_stream, backend_stream).await {
         Ok((c2b, b2c)) => {
+            let dur = start.elapsed().as_secs_f64();
             tracing::info!(
                 frontend = %frontend_name,
                 client = %peer_addr,
                 backend_tag = %backend.tag,
                 bytes_in = c2b,
                 bytes_out = b2c,
-                duration_secs = start.elapsed().as_secs_f64(),
+                duration_secs = dur,
                 "TCP proxy session completed",
             );
+            write_tcp_access_log(log_writer, log_format, &peer_addr, &backend.tag, c2b, b2c, dur).await;
         }
         Err(e) => {
             if e.kind() != std::io::ErrorKind::ConnectionReset
@@ -772,9 +861,12 @@ async fn run_tls_tcp_frontend(
     listener: TlsListenerTask,
     pipeline: Arc<RequestPipeline>,
     frontend_name: &str,
+    log_writer: Option<LogWriter>,
+    log_format: LogFormat,
     shutdown_rx: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let name = frontend_name.to_string();
+    let log_writer = Arc::new(log_writer);
 
     listener
         .run(
@@ -785,9 +877,10 @@ async fn run_tls_tcp_frontend(
                   _ja3: Option<String>| {
                 let pipeline = pipeline.clone();
                 let name = name.clone();
+                let lw = log_writer.clone();
 
                 async move {
-                    handle_tls_tcp_connection(tls_stream, peer_addr, &pipeline, &name).await;
+                    handle_tls_tcp_connection(tls_stream, peer_addr, &pipeline, &name, &lw, log_format).await;
                 }
             },
             shutdown_rx,
@@ -801,6 +894,8 @@ async fn handle_tls_tcp_connection(
     peer_addr: SocketAddr,
     pipeline: &RequestPipeline,
     frontend_name: &str,
+    log_writer: &Arc<Option<LogWriter>>,
+    log_format: LogFormat,
 ) {
     // Check ACL
     if let Err(e) = pipeline.check_acl(peer_addr.ip()) {
@@ -833,15 +928,19 @@ async fn handle_tls_tcp_connection(
             Ok(backend_stream) => {
                 let start = std::time::Instant::now();
                 match TcpProxy::proxy(client_stream, backend_stream).await {
-                    Ok((c2b, b2c)) => tracing::info!(
-                        frontend = %frontend_name,
-                        client = %peer_addr,
-                        backend_tag = %backend.tag,
-                        bytes_in = c2b,
-                        bytes_out = b2c,
-                        duration_secs = start.elapsed().as_secs_f64(),
-                        "TLS TCP proxy session completed",
-                    ),
+                    Ok((c2b, b2c)) => {
+                        let dur = start.elapsed().as_secs_f64();
+                        tracing::info!(
+                            frontend = %frontend_name,
+                            client = %peer_addr,
+                            backend_tag = %backend.tag,
+                            bytes_in = c2b,
+                            bytes_out = b2c,
+                            duration_secs = dur,
+                            "TLS TCP proxy session completed",
+                        );
+                        write_tcp_access_log(log_writer, log_format, &peer_addr, &backend.tag, c2b, b2c, dur).await;
+                    }
                     Err(e) if e.kind() != std::io::ErrorKind::ConnectionReset
                         && e.kind() != std::io::ErrorKind::BrokenPipe =>
                     {
@@ -883,15 +982,19 @@ async fn handle_tls_tcp_connection(
 
     let start = std::time::Instant::now();
     match TcpProxy::proxy(client_stream, backend_stream).await {
-        Ok((c2b, b2c)) => tracing::info!(
-            frontend = %frontend_name,
-            client = %peer_addr,
-            backend_tag = %backend.tag,
-            bytes_in = c2b,
-            bytes_out = b2c,
-            duration_secs = start.elapsed().as_secs_f64(),
-            "TLS TCP proxy session completed",
-        ),
+        Ok((c2b, b2c)) => {
+            let dur = start.elapsed().as_secs_f64();
+            tracing::info!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                bytes_in = c2b,
+                bytes_out = b2c,
+                duration_secs = dur,
+                "TLS TCP proxy session completed",
+            );
+            write_tcp_access_log(log_writer, log_format, &peer_addr, &backend.tag, c2b, b2c, dur).await;
+        }
         Err(e) if e.kind() != std::io::ErrorKind::ConnectionReset
             && e.kind() != std::io::ErrorKind::BrokenPipe =>
         {

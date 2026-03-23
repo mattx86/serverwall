@@ -19,8 +19,6 @@ pub struct ServerWallConfig {
     #[serde(default)]
     pub security_profiles: Vec<SecurityProfile>,
     #[serde(default)]
-    pub tls_profiles: Vec<TlsProfile>,
-    #[serde(default)]
     pub log_profiles: Vec<LogProfile>,
     #[serde(default)]
     pub security: SecurityConfig,
@@ -140,8 +138,6 @@ pub struct FrontendConfig {
     pub waf_ruleset: Option<String>,
     #[serde(default)]
     pub security_profile: Option<String>,
-    #[serde(default)]
-    pub tls_profile: Option<String>,
 
     // Logging
     #[serde(default)]
@@ -499,6 +495,18 @@ pub struct SecurityProfile {
     /// `None` means SMTP frontends fall back to the global `[antispam]` configuration.
     #[serde(default)]
     pub antispam: Option<SecurityProfileAntispam>,
+
+    // TLS settings — override global security.tls for frontends using this profile.
+    #[serde(default = "default_tls_min_version")]
+    pub min_version: String,
+    #[serde(default)]
+    pub cipher_suites: Vec<String>,
+    #[serde(default)]
+    pub hsts_max_age: Option<u64>,
+    #[serde(default)]
+    pub hsts_include_subdomains: bool,
+    #[serde(default)]
+    pub ocsp_stapling: bool,
 }
 
 /// Antispam and antivirus overrides for SMTP frontends that reference this security profile.
@@ -519,25 +527,6 @@ pub struct SecurityProfileAntispam {
     /// Replaces the global antivirus config entirely when this antispam section is present.
     #[serde(default)]
     pub antivirus: AntivirusConfig,
-}
-
-/// Named TLS policy profile — groups min version, cipher suites, HSTS, and OCSP
-/// settings so they can be shared across multiple frontends.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TlsProfile {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default = "default_tls_min_version")]
-    pub min_version: String,
-    #[serde(default)]
-    pub cipher_suites: Vec<String>,
-    #[serde(default)]
-    pub hsts_max_age: Option<u64>,
-    #[serde(default)]
-    pub hsts_include_subdomains: bool,
-    #[serde(default)]
-    pub ocsp_stapling: bool,
 }
 
 /// Named logging profile — groups log format and access-log toggle so they
@@ -1241,7 +1230,6 @@ impl Default for ServerWallConfig {
             backend_pool: Vec::new(),
             waf_ruleset: Vec::new(),
             security_profiles: Vec::new(),
-            tls_profiles: Vec::new(),
             log_profiles: Vec::new(),
             security: SecurityConfig::default(),
             antispam: AntispamConfig::default(),

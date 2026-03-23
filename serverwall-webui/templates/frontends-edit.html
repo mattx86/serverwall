@@ -54,12 +54,8 @@
           <select id="fWafRuleset"><option value="">-- none --</option></select>
         </div>
         <div class="form-group">
-          <label>Security Profile</label>
+          <label>Frontend Profile</label>
           <select id="fSecurityProfile"><option value="">-- none --</option></select>
-        </div>
-        <div class="form-group">
-          <label>TLS Profile</label>
-          <select id="fTlsProfile"><option value="">-- none --</option></select>
         </div>
         <div class="form-group">
           <label>Logging Profile</label>
@@ -97,6 +93,18 @@
             <option value="1.3">TLS 1.3 only</option>
           </select>
         </div>
+        <div class="form-group" id="fTlsCiphersGroup">
+          <label>TLS Cipher Suites (one per line, blank = rustls defaults)</label>
+          <textarea id="fTlsCiphers" rows="5" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.78rem" placeholder="TLS_AES_256_GCM_SHA384&#10;TLS_AES_128_GCM_SHA256&#10;TLS_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"></textarea>
+        </div>
+        <div class="form-group">
+          <label>ACL Allow List (IPs/CIDRs, one per line)</label>
+          <textarea id="fAclAllow" rows="3" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="192.168.1.0/24&#10;10.0.0.1"></textarea>
+        </div>
+        <div class="form-group">
+          <label>ACL Block List (IPs/CIDRs, one per line)</label>
+          <textarea id="fAclBlock" rows="3" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="203.0.113.0/24"></textarea>
+        </div>
       </div>
       <div style="margin-top:.8rem">
         <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">HTTP Headers</label>
@@ -110,6 +118,13 @@
           <label class="form-check"><input type="checkbox" id="fAccessLog"> Access Log</label>
           <label class="form-check"><input type="checkbox" id="fWaf"> WAF Enabled</label>
         </div>
+      </div>
+      <div style="margin-top:.8rem">
+        <div style="display:flex;align-items:center;gap:.7rem;margin-bottom:.4rem">
+          <label style="font-size:.8rem;color:var(--muted);flex:1">Custom Request Headers</label>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="addCustomHeader()">+ Add Header</button>
+        </div>
+        <div id="fCustomHeaderRows"></div>
       </div>
       <div id="fSmtpHeadersGroup" style="margin-top:.8rem;display:none">
         <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">SMTP Headers</label>
@@ -129,6 +144,19 @@
 <script>
 var feName = '';
 var _certMap = {};
+var _customHeaders = [];
+
+var STRONG_CIPHERS = [
+  'TLS_AES_256_GCM_SHA384',
+  'TLS_AES_128_GCM_SHA256',
+  'TLS_CHACHA20_POLY1305_SHA256',
+  'TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384',
+  'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256',
+  'TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256',
+  'TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384',
+  'TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256',
+  'TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256',
+].join('\n');
 
 function getFeName() {
   return new URLSearchParams(window.location.search).get('name') || '';
@@ -157,7 +185,7 @@ function syncCertFields() {
   }
 }
 
-async function loadDropdowns(currentPool, currentWaf, currentCert, currentProfile, currentTls, currentLog) {
+async function loadDropdowns(currentPool, currentWaf, currentCert, currentProfile, currentLog) {
   // Pools
   try {
     var r = await fetch('/api/backends', {headers: authHeaders()});
@@ -223,20 +251,6 @@ async function loadDropdowns(currentPool, currentWaf, currentCert, currentProfil
     });
   } catch(e) {}
 
-  // TLS profiles
-  try {
-    var r5 = await fetch('/api/tls-profiles', {headers: authHeaders()});
-    var d5 = await r5.json();
-    var tlsSel = document.getElementById('fTlsProfile');
-    tlsSel.innerHTML = '<option value="">-- none --</option>';
-    (d5.profiles || []).forEach(function(p) {
-      var opt = document.createElement('option');
-      opt.value = p.name; opt.textContent = p.name + (p.description ? ' — ' + p.description : '');
-      if (p.name === currentTls) opt.selected = true;
-      tlsSel.appendChild(opt);
-    });
-  } catch(e) {}
-
   // Log profiles
   try {
     var r6 = await fetch('/api/log-profiles', {headers: authHeaders()});
@@ -289,13 +303,22 @@ async function loadFrontend() {
     document.getElementById('fSmtpXFF').checked      = !!(f.smtp_headers && f.smtp_headers.x_forwarded_for);
     if (f.log_format) setSelect('fLogFormat', f.log_format);
     if (f.tls_min_version) setSelect('fTlsMinVersion', f.tls_min_version);
+    // TLS ciphers — pre-fill with strong defaults when none configured
+    var ciphers = f.tls_ciphers || [];
+    document.getElementById('fTlsCiphers').value = ciphers.length ? ciphers.join('\n') : STRONG_CIPHERS;
+    // ACL
+    document.getElementById('fAclAllow').value = (f.acl && f.acl.allow_list || []).join('\n');
+    document.getElementById('fAclBlock').value = (f.acl && f.acl.block_list || []).join('\n');
+    // Custom request headers
+    _customHeaders = (f.headers && f.headers.custom) ? f.headers.custom.slice() : [];
+    renderCustomHeaders();
     toggleProtocolFields();
     setSelect('fBalancer', (f.balancer || 'round_robin').toLowerCase());
     toggleStickyField();
     if (f.session_cookie) document.getElementById('fStickyCookie').value = f.session_cookie;
     if (f.acl) setSelect('fAclDefault', (f.acl.default_action || 'allow').toLowerCase());
 
-    await loadDropdowns(f.backend_pool, f.waf_ruleset, f.tls_cert, f.security_profile, f.tls_profile, f.log_profile);
+    await loadDropdowns(f.backend_pool, f.waf_ruleset, f.tls_cert, f.security_profile, f.log_profile);
     document.getElementById('editPanel').style.display = '';
   } catch(e) {
     document.getElementById('loadError').textContent = 'Request failed: ' + e.message;
@@ -322,6 +345,15 @@ async function saveFrontend() {
   }
 
   var proto = document.getElementById('fProtocol').value;
+  var ciphersRaw = document.getElementById('fTlsCiphers').value.trim();
+  var cipherList = ciphersRaw ? ciphersRaw.split('\n').map(function(s){return s.trim()}).filter(Boolean) : [];
+
+  var allowRaw = document.getElementById('fAclAllow').value.trim();
+  var blockRaw = document.getElementById('fAclBlock').value.trim();
+
+  // Collect custom headers (filter out incomplete rows)
+  var customHeaders = _customHeaders.filter(function(h){return h.name.trim() && h.value.trim();});
+
   var body = {
     name:        feName,
     protocol:    proto,
@@ -330,6 +362,7 @@ async function saveFrontend() {
     balancer:    document.getElementById('fBalancer').value,
     waf_enabled: document.getElementById('fWaf').checked,
     access_log:  document.getElementById('fAccessLog').checked,
+    tls_ciphers: cipherList,
     headers: {
       x_forwarded_for:   document.getElementById('fXFF').checked,
       x_real_ip:         document.getElementById('fXRI').checked,
@@ -337,12 +370,17 @@ async function saveFrontend() {
       x_forwarded_host:  document.getElementById('fXFH').checked,
       x_forwarded_port:  document.getElementById('fXFPort').checked,
       x_request_id:      document.getElementById('fXRID').checked,
+      custom:            customHeaders,
     },
     smtp_headers: {
       add_received:    document.getElementById('fSmtpReceived').checked,
       x_forwarded_for: document.getElementById('fSmtpXFF').checked,
     },
-    acl: { default_action: document.getElementById('fAclDefault').value },
+    acl: {
+      default_action: document.getElementById('fAclDefault').value,
+      allow_list: allowRaw ? allowRaw.split('\n').map(function(s){return s.trim()}).filter(Boolean) : [],
+      block_list: blockRaw ? blockRaw.split('\n').map(function(s){return s.trim()}).filter(Boolean) : [],
+    },
   };
   var logFmt = document.getElementById('fLogFormat').value;
   if (logFmt) body.log_format = logFmt;
@@ -354,9 +392,6 @@ async function saveFrontend() {
 
   var secProfile = document.getElementById('fSecurityProfile').value.trim();
   if (secProfile) body.security_profile = secProfile;
-
-  var tlsProfile = document.getElementById('fTlsProfile').value.trim();
-  if (tlsProfile) body.tls_profile = tlsProfile;
 
   var logProfile = document.getElementById('fLogProfile').value.trim();
   if (logProfile) body.log_profile = logProfile;
@@ -391,6 +426,33 @@ async function saveFrontend() {
     errEl.style.display = '';
   }
 }
+
+function renderCustomHeaders() {
+  var container = document.getElementById('fCustomHeaderRows');
+  if (!_customHeaders.length) {
+    container.innerHTML = '<div style="font-size:.78rem;color:var(--muted);padding:.2rem 0">No custom headers. Click + Add Header to add one.</div>';
+    return;
+  }
+  container.innerHTML = _customHeaders.map(function(h, idx) {
+    return '<div style="display:grid;grid-template-columns:1fr 1.5fr auto;gap:.4rem;margin-bottom:.3rem">' +
+      '<input type="text" value="'+escAttr(h.name)+'" onchange="_customHeaders['+idx+'].name=this.value" placeholder="Header-Name" style="font-size:.82rem">' +
+      '<input type="text" value="'+escAttr(h.value)+'" onchange="_customHeaders['+idx+'].value=this.value" placeholder="value" style="font-size:.82rem">' +
+      '<button type="button" class="btn btn-danger btn-sm" onclick="removeCustomHeader('+idx+')" style="padding:.2rem .45rem">&#x2715;</button>' +
+      '</div>';
+  }).join('');
+}
+
+function addCustomHeader() {
+  _customHeaders.push({name: '', value: ''});
+  renderCustomHeaders();
+}
+
+function removeCustomHeader(idx) {
+  _customHeaders.splice(idx, 1);
+  renderCustomHeaders();
+}
+
+function escAttr(s){return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}
 
 initPage('frontends');
 loadFrontend();

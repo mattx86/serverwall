@@ -45,6 +45,11 @@ fn profile_json(p: &SecurityProfile) -> Value {
             "block_countries": p.geo.block_countries,
             "allow_countries": p.geo.allow_countries,
         },
+        "min_version":             p.min_version,
+        "cipher_suites":           p.cipher_suites,
+        "hsts_max_age":            p.hsts_max_age,
+        "hsts_include_subdomains": p.hsts_include_subdomains,
+        "ocsp_stapling":           p.ocsp_stapling,
         "antispam": p.antispam.as_ref().map(|a| json!({
             "enabled":                  a.enabled,
             "possible_spam_threshold":  a.possible_spam_threshold,

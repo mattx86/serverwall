@@ -60,9 +60,6 @@ pub struct SecurityProfilesPage;
 #[template(path = "acl.html")]
 pub struct AclPage;
 
-#[derive(Template)]
-#[template(path = "tls-profiles.html")]
-pub struct TlsProfilesPage;
 
 #[derive(Template)]
 #[template(path = "log-profiles.html")]
@@ -122,8 +119,7 @@ pub fn render_page(path: &str) -> Option<String> {
         "security.html"              => SecurityPage.render().ok(),
         "security-profiles.html"     => SecurityProfilesPage.render().ok(),
         "acl.html"                   => AclPage.render().ok(),
-        "tls-profiles.html"          => TlsProfilesPage.render().ok(),
-        "log-profiles.html"          => LogProfilesPage.render().ok(),
+"log-profiles.html"          => LogProfilesPage.render().ok(),
         "relay.html"                 => RelayPage.render().ok(),
         "dkim.html"                  => DkimPage.render().ok(),
         "dmarc.html"                 => DmarcPage.render().ok(),

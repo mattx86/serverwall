@@ -15,7 +15,6 @@ pub mod antispam;
 pub mod system;
 pub mod security_settings;
 pub mod security_profiles;
-pub mod tls_profiles;
 pub mod log_profiles;
 pub mod relay;
 pub mod global_settings;
@@ -173,11 +172,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/security-profiles/{name}", get(security_profiles::get)
             .put(security_profiles::update)
             .delete(security_profiles::delete))
-        // TLS profiles
-        .route("/api/tls-profiles", get(tls_profiles::list).post(tls_profiles::create))
-        .route("/api/tls-profiles/{name}", get(tls_profiles::get)
-            .put(tls_profiles::update)
-            .delete(tls_profiles::delete))
         // Logging profiles
         .route("/api/log-profiles", get(log_profiles::list).post(log_profiles::create))
         .route("/api/log-profiles/{name}", get(log_profiles::get)

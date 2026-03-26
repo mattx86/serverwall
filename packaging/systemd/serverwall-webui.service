@@ -9,6 +9,11 @@ Type=simple
 ExecStart=/opt/serverwall/bin/serverwall-webui --config /opt/serverwall/etc/serverwall.toml
 Restart=on-failure
 RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=35
+# Uncomment to enable systemd socket activation (zero bind-gap on restart):
+# Sockets=serverwall-webui.socket
+# NonBlocking=true
 User=serverwall
 Group=serverwall
 ReadWritePaths=/opt/serverwall/etc /opt/serverwall/var /opt/serverwall/run

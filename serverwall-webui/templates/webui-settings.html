@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}WebUI Access{% endblock %}
+{% block head_extra %}
+<style>
+.save-row{margin-top:1.2rem;display:flex;gap:.6rem;align-items:center}
+.save-ok{color:var(--success,#4ade80);font-size:.82rem;display:none}
+.save-err{color:var(--danger,#f87171);font-size:.82rem;display:none}
+.warn-box{background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.4);border-radius:6px;padding:.75rem 1rem;font-size:.82rem;color:#fbbf24;margin-bottom:1.2rem;line-height:1.5}
+</style>
+{% endblock %}
+{% block content %}
+    <div class="toolbar">
+      <h2 style="margin:0;flex:1">WebUI Access</h2>
+    </div>
+
+    <div id="loadError" class="form-error" style="display:none"></div>
+
+    <div class="form-panel">
+      <div class="warn-box">
+        <strong>Warning:</strong> An overly restrictive allowlist may lock you out of the WebUI.
+        If that happens, use the CLI to restore access:<br>
+        <code>serverwallctl webui set 0.0.0.0/0 ::/0</code>
+      </div>
+
+      <p style="margin:0 0 1rem;font-size:.85rem;color:var(--muted)">
+        IP addresses and CIDRs that are permitted to connect to the WebUI.
+        One entry per line. Default allows all: <code>0.0.0.0/0</code> and <code>::/0</code>.
+        Changes take effect immediately (no restart needed).
+      </p>
+
+      <div class="form-group">
+        <label>Allowed IPs / CIDRs (one per line)</label>
+        <textarea id="wAllowList" rows="8" placeholder="0.0.0.0/0&#10;::/0" style="font-family:monospace"></textarea>
+      </div>
+
+      <div class="save-row">
+        <button class="btn btn-primary" onclick="save()">Save</button>
+        <span class="save-ok" id="saveOk">Saved.</span>
+        <span class="save-err" id="saveErr"></span>
+      </div>
+    </div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function load() {
+  try {
+    var r = await fetch('/api/settings/webui', {headers: authHeaders()});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var d = await r.json();
+    document.getElementById('wAllowList').value = (d.allow_list || []).join('\n');
+  } catch(e) {
+    document.getElementById('loadError').textContent = 'Failed to load: ' + e.message;
+    document.getElementById('loadError').style.display = '';
+  }
+}
+
+async function save() {
+  var okEl  = document.getElementById('saveOk');
+  var errEl = document.getElementById('saveErr');
+  okEl.style.display = 'none'; errEl.style.display = 'none';
+
+  var raw = document.getElementById('wAllowList').value.trim();
+  var allow_list = raw ? raw.split('\n').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+
+  try {
+    var r = await fetch('/api/settings/webui', {
+      method: 'PUT',
+      headers: authHeaders(),
+      body: JSON.stringify({allow_list: allow_list}),
+    });
+    var res = await r.json();
+    if (!r.ok) { errEl.textContent = res.error || 'Save failed'; errEl.style.display = ''; return; }
+    okEl.style.display = '';
+    setTimeout(function(){ okEl.style.display = 'none'; }, 2500);
+  } catch(e) { errEl.textContent = 'Request failed: ' + e.message; errEl.style.display = ''; }
+}
+
+initPage('webui-settings');
+load();
+</script>
+{% endblock %}

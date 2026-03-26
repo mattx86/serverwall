@@ -1,0 +1,14 @@
+[Unit]
+Description=ServerWall Web UI socket
+Documentation=https://github.com/mattx86/serverwall
+
+[Socket]
+# Holds the webui listening socket across service restarts so there is zero
+# bind gap and no new connections are refused during a restart.
+# Default webui port — update if webui.listen is changed in serverwall.toml.
+ListenStream=0.0.0.0:8443
+Accept=false
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target

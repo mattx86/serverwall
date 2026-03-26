@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use tokio::net::TcpStream;
 use tokio::sync::watch;
@@ -48,6 +48,7 @@ use crate::pipeline::RequestPipeline;
 use crate::proxy::HttpProxy;
 use crate::proxy::ImapProxy;
 use crate::proxy::SmtpProxy;
+use crate::proxy::StratumProxy;
 use crate::proxy::TcpProxy;
 use crate::reload::ReloadHandler;
 
@@ -102,11 +103,11 @@ impl Server {
             tokio::spawn(async move { handler.run(config_tx, rx).await; });
         }
 
-        // Per-frontend shutdown senders + task handles.
-        // Key: frontend name; Value: (shutdown_tx, JoinHandle).
+        // Per-frontend shutdown senders + task handles + active-connection counters.
+        // Key: frontend name; Value: (shutdown_tx, JoinHandle, active_connections).
         let mut fe_shutdowns: std::collections::HashMap<
             String,
-            (watch::Sender<bool>, tokio::task::JoinHandle<()>),
+            (watch::Sender<bool>, tokio::task::JoinHandle<()>, Arc<AtomicUsize>),
         > = Default::default();
 
         // Health-checker task handles — aborted and rebuilt on every reload.
@@ -137,11 +138,38 @@ impl Server {
                 // Process shutdown (SIGTERM / Ctrl-C)
                 _ = &mut kill_rx => {
                     tracing::info!("shutdown signal received, stopping all listeners");
-                    for (name, (tx, _)) in fe_shutdowns.drain() {
+                    let mut drain_counters: Vec<(String, Arc<AtomicUsize>)> = Vec::new();
+                    for (name, (tx, _, active)) in fe_shutdowns.drain() {
                         let _ = tx.send(true);
                         tracing::debug!(frontend = %name, "listener shutdown signal sent");
+                        drain_counters.push((name, active));
                     }
                     for task in hc_tasks.drain(..) { task.abort(); }
+
+                    // Graceful drain: wait for all active connection tasks to finish.
+                    let drain_secs = self.config.global.graceful_drain_secs;
+                    if drain_secs > 0 {
+                        tracing::info!(drain_timeout_secs = drain_secs, "draining active connections");
+                        let deadline = tokio::time::Instant::now()
+                            + std::time::Duration::from_secs(drain_secs);
+                        loop {
+                            let total: usize = drain_counters.iter()
+                                .map(|(_, c)| c.load(Ordering::Relaxed))
+                                .sum();
+                            if total == 0 {
+                                tracing::info!("connection drain complete");
+                                break;
+                            }
+                            if tokio::time::Instant::now() >= deadline {
+                                tracing::warn!(
+                                    remaining = total,
+                                    "graceful drain timeout exceeded, forcing shutdown",
+                                );
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        }
+                    }
                     break;
                 }
 
@@ -160,7 +188,7 @@ impl Server {
                     // Stop all current frontend listeners and wait for them to
                     // fully exit so their ports are released before rebinding.
                     let mut old_handles = Vec::new();
-                    for (name, (tx, handle)) in fe_shutdowns.drain() {
+                    for (name, (tx, handle, _active)) in fe_shutdowns.drain() {
                         let _ = tx.send(true);
                         tracing::info!(frontend = %name, "listener stopped for reload");
                         old_handles.push(handle);
@@ -204,7 +232,7 @@ async fn apply_config(
     config: &ServerWallConfig,
     fe_shutdowns: &mut std::collections::HashMap<
         String,
-        (watch::Sender<bool>, tokio::task::JoinHandle<()>),
+        (watch::Sender<bool>, tokio::task::JoinHandle<()>, Arc<AtomicUsize>),
     >,
     hc_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
     proc_shutdown_rx: watch::Receiver<bool>,
@@ -296,6 +324,9 @@ async fn apply_config(
         // Per-frontend shutdown channel.
         let (fe_tx, fe_rx) = watch::channel(false);
 
+        // Active-connection counter; each spawn arm sets this before moving the listener.
+        let mut active_conns: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+
         let handle = match frontend.protocol {
             ProtocolType::Tcp => {
                 // Resolve log settings (profile takes precedence for format/access_log;
@@ -353,6 +384,7 @@ async fn apply_config(
                         frontend.max_connections,
                         acceptor,
                     );
+                    active_conns = listener.active_connections();
                     let frontend_name = frontend.name.clone();
                     let p = pipeline.clone();
                     tokio::spawn(async move {
@@ -367,11 +399,91 @@ async fn apply_config(
                         frontend.name.clone(),
                         frontend.max_connections,
                     );
+                    active_conns = listener.active_connections();
                     let frontend_name = frontend.name.clone();
                     let p = pipeline.clone();
                     tokio::spawn(async move {
                         if let Err(e) = run_tcp_frontend(listener, p, &frontend_name, tcp_log_writer, eff_log_format, fe_rx).await {
                             tracing::error!(frontend = %frontend_name, error = %e, "TCP frontend failed");
+                        }
+                    })
+                }
+            }
+            ProtocolType::Stratum => {
+                // Resolve log settings (same pattern as Tcp).
+                let (eff_log_format, eff_access_log, eff_log_file) =
+                    if let Some(ref pname) = frontend.log_profile {
+                        match config.log_profiles.iter().find(|p| p.name == *pname) {
+                            Some(p) => (p.format, p.access_log, frontend.log_file.clone()),
+                            None => {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    profile  = %pname,
+                                    "log profile not found; falling back to inline settings",
+                                );
+                                (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                            }
+                        }
+                    } else {
+                        (frontend.log_format, frontend.access_log, frontend.log_file.clone())
+                    };
+
+                let stratum_log_writer: Option<LogWriter> = if eff_access_log {
+                    if let Some(ref path) = eff_log_file {
+                        match tokio::fs::OpenOptions::new()
+                            .create(true).append(true).open(path).await
+                        {
+                            Ok(file) => Some(Arc::new(tokio::sync::Mutex::new(
+                                tokio::io::BufWriter::new(file),
+                            ))),
+                            Err(e) => {
+                                tracing::warn!(
+                                    frontend = %frontend.name,
+                                    path = %path,
+                                    error = %e,
+                                    "cannot open stratum access log file — logging disabled for this frontend",
+                                );
+                                None
+                            }
+                        }
+                    } else { None }
+                } else { None };
+
+                if frontend.tls_cert.is_some() || frontend.tls_pfx.is_some() {
+                    // TLS-terminated stratum (ssl+stratum://)
+                    let cert_store = Arc::new(CertStore::new());
+                    let certified_key = CertStore::load_from_frontend(frontend)
+                        .map_err(|e| anyhow::anyhow!("TLS error in Stratum frontend '{}': {}", frontend.name, e))?;
+                    cert_store.add_from_cert(certified_key.clone());
+                    cert_store.set_default(certified_key);
+                    let acceptor = build_tls_acceptor(cert_store, &frontend.tls_min_version)
+                        .map_err(|e| anyhow::anyhow!("TLS acceptor error in frontend '{}': {}", frontend.name, e))?;
+                    let listener = TlsListenerTask::new(
+                        frontend.listen.clone(),
+                        frontend.name.clone(),
+                        frontend.max_connections,
+                        acceptor,
+                    );
+                    active_conns = listener.active_connections();
+                    let frontend_name = frontend.name.clone();
+                    let p = pipeline.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = run_tls_stratum_frontend(listener, p, &frontend_name, stratum_log_writer, eff_log_format, fe_rx).await {
+                            tracing::error!(frontend = %frontend_name, error = %e, "TLS Stratum frontend failed");
+                        }
+                    })
+                } else {
+                    let listener = TcpListenerTask::new(
+                        frontend.listen.clone(),
+                        frontend.name.clone(),
+                        frontend.max_connections,
+                    );
+                    active_conns = listener.active_connections();
+                    let frontend_name = frontend.name.clone();
+                    let p = pipeline.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = run_stratum_frontend(listener, p, &frontend_name, stratum_log_writer, eff_log_format, fe_rx).await {
+                            tracing::error!(frontend = %frontend_name, error = %e, "Stratum frontend failed");
                         }
                     })
                 }
@@ -390,6 +502,7 @@ async fn apply_config(
                     frontend.max_connections,
                     acceptor,
                 );
+                active_conns = listener.active_connections();
                 let frontend_name = frontend.name.clone();
                 let p = pipeline.clone();
                 tokio::spawn(async move {
@@ -580,6 +693,7 @@ async fn apply_config(
                     config.security.acl.domain.block.clone(),
                 ));
 
+                active_conns = tls_listener.active_connections();
                 let frontend_name = frontend.name.clone();
                 let p = pipeline.clone();
                 tokio::spawn(async move {
@@ -602,6 +716,7 @@ async fn apply_config(
                     frontend.max_connections,
                     acceptor,
                 );
+                active_conns = listener.active_connections();
                 let frontend_name = frontend.name.clone();
                 let smtp_headers = frontend.smtp_headers.clone();
                 let p = pipeline.clone();
@@ -630,6 +745,7 @@ async fn apply_config(
                     frontend.name.clone(),
                     frontend.max_connections,
                 );
+                active_conns = listener.active_connections();
                 let frontend_name = frontend.name.clone();
                 let smtp_headers = frontend.smtp_headers.clone();
                 let p = pipeline.clone();
@@ -654,7 +770,7 @@ async fn apply_config(
             }
         };
 
-        fe_shutdowns.insert(frontend.name.clone(), (fe_tx, handle));
+        fe_shutdowns.insert(frontend.name.clone(), (fe_tx, handle, active_conns));
     }
 
     Ok(())
@@ -1007,6 +1123,302 @@ async fn handle_tls_tcp_connection(
             );
         }
         Err(_) => {}
+    }
+}
+
+/// Apply Stratum-specific socket options: low-delay ToS, TCP keepalive, and NODELAY.
+fn apply_stratum_socket_opts(stream: &TcpStream) {
+    use socket2::SockRef;
+    let sock = SockRef::from(stream);
+    // IPTOS_LOWDELAY = 0x10 — minimises queuing delay for real-time miner traffic
+    let _ = sock.set_tos(0x10u32);
+    // TCP keepalive — detect stale miner connections within ~90 s
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(std::time::Duration::from_secs(60))
+        .with_interval(std::time::Duration::from_secs(10))
+        .with_retries(3);
+    let _ = sock.set_tcp_keepalive(&keepalive);
+    // TCP_NODELAY — send each JSON line immediately, no Nagle buffering
+    let _ = sock.set_nodelay(true);
+}
+
+/// Write a single Stratum session line to the access log file.
+async fn write_stratum_access_log(
+    log_writer: &Arc<Option<LogWriter>>,
+    log_format: LogFormat,
+    client: &SocketAddr,
+    backend_tag: &str,
+    worker: Option<&str>,
+    bytes_in: u64,
+    bytes_out: u64,
+    duration_secs: f64,
+) {
+    if let Some(ref writer) = **log_writer {
+        let w = worker.unwrap_or("-");
+        let line = match log_format {
+            LogFormat::Json => format!(
+                "{{\"time\":\"{}\",\"client\":\"{}\",\"worker\":\"{}\",\"backend\":\"{}\",\"bytes_in\":{},\"bytes_out\":{},\"duration_secs\":{:.3}}}\n",
+                chrono::Utc::now().to_rfc3339(),
+                client,
+                w,
+                backend_tag,
+                bytes_in,
+                bytes_out,
+                duration_secs,
+            ),
+            _ => format!(
+                "{} - {} [{}] \"STRATUM {}\" - {}\n",
+                client.ip(),
+                w,
+                chrono::Local::now().format("%d/%b/%Y:%H:%M:%S %z"),
+                backend_tag,
+                bytes_in + bytes_out,
+            ),
+        };
+        let mut lk = writer.lock().await;
+        let _ = lk.write_all(line.as_bytes()).await;
+        let _ = lk.flush().await;
+    }
+}
+
+/// Run a plain Stratum frontend: accept connections, check ACL, select backend, proxy.
+async fn run_stratum_frontend(
+    listener: TcpListenerTask,
+    pipeline: Arc<RequestPipeline>,
+    frontend_name: &str,
+    log_writer: Option<LogWriter>,
+    log_format: LogFormat,
+    shutdown_rx: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let name = frontend_name.to_string();
+    let log_writer = Arc::new(log_writer);
+
+    listener
+        .run(
+            move |client_stream: TcpStream, peer_addr: SocketAddr, _local_addr: SocketAddr| {
+                let pipeline = pipeline.clone();
+                let name = name.clone();
+                let lw = log_writer.clone();
+
+                async move {
+                    handle_stratum_connection(client_stream, peer_addr, &pipeline, &name, &lw, log_format)
+                        .await;
+                }
+            },
+            shutdown_rx,
+        )
+        .await
+}
+
+/// Handle a single plain Stratum proxy connection.
+async fn handle_stratum_connection(
+    client_stream: TcpStream,
+    peer_addr: SocketAddr,
+    pipeline: &RequestPipeline,
+    frontend_name: &str,
+    log_writer: &Arc<Option<LogWriter>>,
+    log_format: LogFormat,
+) {
+    // Check ACL
+    if let Err(e) = pipeline.check_acl(peer_addr.ip()) {
+        tracing::debug!(
+            frontend = %frontend_name,
+            client = %peer_addr,
+            error = %e,
+            "Stratum connection denied by ACL",
+        );
+        return;
+    }
+
+    // Apply socket options on client stream
+    apply_stratum_socket_opts(&client_stream);
+
+    // Select backend
+    let (backend, _guard) = match pipeline.select_backend(peer_addr.ip()) {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::warn!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                error = %e,
+                "no Stratum backend available",
+            );
+            return;
+        }
+    };
+
+    // Connect to backend
+    let backend_stream = match RequestPipeline::connect_backend(&backend).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                error = %e,
+                "failed to connect to Stratum backend",
+            );
+            return;
+        }
+    };
+
+    // Apply socket options on backend stream
+    apply_stratum_socket_opts(&backend_stream);
+
+    // Proxy with worker sniffing
+    match StratumProxy::proxy(client_stream, backend_stream, peer_addr).await {
+        Ok(result) => {
+            tracing::info!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                worker = result.worker.as_deref().unwrap_or("-"),
+                bytes_in = result.bytes_from_client,
+                bytes_out = result.bytes_from_backend,
+                duration_secs = result.duration_secs,
+                "Stratum session completed",
+            );
+            write_stratum_access_log(
+                log_writer, log_format, &peer_addr, &backend.tag,
+                result.worker.as_deref(),
+                result.bytes_from_client, result.bytes_from_backend, result.duration_secs,
+            ).await;
+        }
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::ConnectionReset
+                && e.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                tracing::debug!(
+                    frontend = %frontend_name,
+                    client = %peer_addr,
+                    backend_tag = %backend.tag,
+                    error = %e,
+                    "Stratum proxy I/O error",
+                );
+            }
+        }
+    }
+}
+
+/// Run a TLS-terminating Stratum frontend.
+async fn run_tls_stratum_frontend(
+    listener: TlsListenerTask,
+    pipeline: Arc<RequestPipeline>,
+    frontend_name: &str,
+    log_writer: Option<LogWriter>,
+    log_format: LogFormat,
+    shutdown_rx: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    let name = frontend_name.to_string();
+    let log_writer = Arc::new(log_writer);
+
+    listener
+        .run(
+            move |tls_stream: TlsStream<TcpStream>,
+                  peer_addr: SocketAddr,
+                  _local_addr: SocketAddr,
+                  _sni: Option<String>,
+                  _ja3: Option<String>| {
+                let pipeline = pipeline.clone();
+                let name = name.clone();
+                let lw = log_writer.clone();
+
+                async move {
+                    handle_tls_stratum_connection(tls_stream, peer_addr, &pipeline, &name, &lw, log_format).await;
+                }
+            },
+            shutdown_rx,
+        )
+        .await
+}
+
+/// Handle a single TLS-terminated Stratum proxy connection.
+async fn handle_tls_stratum_connection(
+    client_stream: TlsStream<TcpStream>,
+    peer_addr: SocketAddr,
+    pipeline: &RequestPipeline,
+    frontend_name: &str,
+    log_writer: &Arc<Option<LogWriter>>,
+    log_format: LogFormat,
+) {
+    // Check ACL
+    if let Err(e) = pipeline.check_acl(peer_addr.ip()) {
+        tracing::debug!(
+            frontend = %frontend_name,
+            client = %peer_addr,
+            error = %e,
+            "TLS Stratum connection denied by ACL",
+        );
+        return;
+    }
+
+    // Apply socket options on the underlying TCP stream
+    apply_stratum_socket_opts(client_stream.get_ref().0);
+
+    // Select backend
+    let (backend, _guard) = match pipeline.select_backend(peer_addr.ip()) {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::warn!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                error = %e,
+                "no Stratum backend available",
+            );
+            return;
+        }
+    };
+
+    // Connect to backend
+    let backend_stream = match RequestPipeline::connect_backend(&backend).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                error = %e,
+                "failed to connect to Stratum backend",
+            );
+            return;
+        }
+    };
+
+    // Apply socket options on backend stream
+    apply_stratum_socket_opts(&backend_stream);
+
+    // Proxy with worker sniffing
+    match StratumProxy::proxy(client_stream, backend_stream, peer_addr).await {
+        Ok(result) => {
+            tracing::info!(
+                frontend = %frontend_name,
+                client = %peer_addr,
+                backend_tag = %backend.tag,
+                worker = result.worker.as_deref().unwrap_or("-"),
+                bytes_in = result.bytes_from_client,
+                bytes_out = result.bytes_from_backend,
+                duration_secs = result.duration_secs,
+                "TLS Stratum session completed",
+            );
+            write_stratum_access_log(
+                log_writer, log_format, &peer_addr, &backend.tag,
+                result.worker.as_deref(),
+                result.bytes_from_client, result.bytes_from_backend, result.duration_secs,
+            ).await;
+        }
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::ConnectionReset
+                && e.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                tracing::debug!(
+                    frontend = %frontend_name,
+                    client = %peer_addr,
+                    backend_tag = %backend.tag,
+                    error = %e,
+                    "TLS Stratum proxy I/O error",
+                );
+            }
+        }
     }
 }
 

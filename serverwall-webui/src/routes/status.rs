@@ -14,6 +14,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Json<Value> {
         "uptime_seconds": uptime,
         "frontend_count": config.frontend.len(),
         "backend_pool_count": config.backend_pool.len(),
+        // TODO: active_connections requires daemon IPC (proxy process tracking); not available via webui AppState alone
         "active_connections": 0,
         "queue_total": queue_stats.total,
         "queue_pending": queue_stats.pending,

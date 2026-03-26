@@ -36,8 +36,9 @@ var NAV_ITEMS = [
   ]},
   {id:'logs',      label:'Logs',         href:'/ui/logs.html'},
   {id:'settings', label:'Settings', href:'/ui/global-settings.html', children:[
-    {id:'global-settings', label:'Global',               href:'/ui/global-settings.html'},
-    {id:'acme-settings',   label:"ACME / Let's Encrypt", href:'/ui/acme-settings.html'},
+    {id:'global-settings',  label:'Global',               href:'/ui/global-settings.html'},
+    {id:'acme-settings',    label:"ACME / Let's Encrypt", href:'/ui/acme-settings.html'},
+    {id:'webui-settings',   label:'WebUI Access',         href:'/ui/webui-settings.html'},
   ]},
 ];
 

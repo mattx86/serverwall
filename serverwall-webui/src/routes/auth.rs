@@ -280,7 +280,10 @@ fn render_captcha_image(expr: &str, seed: u64) -> String {
     let x0 = (W - total_w) / 2;
     let y0 = (H - 7 * SCALE) / 2;
 
-    // Render characters: Y-jitter ±3px, ink colour variation ±10, ~4% extra dots
+    // Render characters in two passes so overlays always appear on top of all glyphs.
+    // Pass 1: character bitmaps only. Overlays are buffered in `overlays`.
+    let mut overlays = String::with_capacity(2048);
+
     for (ci, &ch) in chars.iter().enumerate() {
         let fi = match font_index(ch) { Some(i) => i, None => continue };
         let bitmap = &FONT[fi];
@@ -312,7 +315,7 @@ fn render_captcha_image(expr: &str, seed: u64) -> String {
             }
         }
 
-        // Per-character overlay drawn OVER the glyph: scatter pixels + short strokes
+        // Buffer per-character overlays (scatter pixels + short strokes) for pass 2.
         let bh_u = (7 * SCALE) as u64;
         let bw_u = cw as u64;
 
@@ -328,7 +331,7 @@ fn render_captcha_image(expr: &str, seed: u64) -> String {
                 let v = (BG + rng.rc(30)).clamp(0, 100);
                 (v, v, v)
             };
-            svg.push_str(&format!(
+            overlays.push_str(&format!(
                 r#"<rect x="{sx}" y="{sy}" width="{sz}" height="{sz}" fill="rgb({sr},{sg},{sb})"/>"#
             ));
         }
@@ -342,11 +345,14 @@ fn render_captcha_image(expr: &str, seed: u64) -> String {
             let lr = (70  + rng.rc(60)).clamp(0, 255);
             let lg = (90  + rng.rc(60)).clamp(0, 255);
             let lb = (150 + rng.rc(80)).clamp(0, 255);
-            svg.push_str(&format!(
-                r#"<line x1="{lx0}" y1="{ly0}" x2="{lx1}" y2="{ly1}" stroke="rgb({lr},{lg},{lb})" stroke-width="1" opacity="0.75"/>"#
+            overlays.push_str(&format!(
+                r#"<line x1="{lx0}" y1="{ly0}" x2="{lx1}" y2="{ly1}" stroke="rgb({lr},{lg},{lb})" stroke-width="2" opacity="0.75"/>"#
             ));
         }
     }
+
+    // Pass 2: flush all per-character overlays on top of every glyph.
+    svg.push_str(&overlays);
 
     // 6 crossing lines with varying width and colour
     for i in 0..6u64 {
@@ -354,7 +360,7 @@ fn render_captcha_image(expr: &str, seed: u64) -> String {
         let ly0 = rng.rn(H as u64) as i32;
         let lx1 = rng.rn(W as u64) as i32;
         let ly1 = rng.rn(H as u64) as i32;
-        let sw = if i % 3 == 0 { "2" } else { "1" };
+        let sw = if i % 3 == 0 { "3" } else { "2" };
         let lr = (80  + rng.rc(40)).clamp(0, 255);
         let lg = (100 + rng.rc(40)).clamp(0, 255);
         let lb = (160 + rng.rc(50)).clamp(0, 255);

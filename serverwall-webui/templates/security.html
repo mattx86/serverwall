@@ -38,6 +38,7 @@
       <div class="tab" onclick="switchTab('bot')">Bot Detection</div>
       <div class="tab" onclick="switchTab('cookies')">Cookie Security</div>
       <div class="tab" onclick="switchTab('ratelimit')">Rate Limiting</div>
+      <div class="tab" onclick="switchTab('acl')">ACL</div>
     </div>
 
     <!-- Tab: TLS Policy -->
@@ -180,6 +181,26 @@
           <label>Content-Security-Policy</label>
           <textarea id="hdrCsp" rows="3" placeholder="default-src 'self'; script-src 'self'" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem"></textarea>
         </div>
+        <div style="margin-top:1rem;border-top:1px solid rgba(255,255,255,.07);padding-top:1rem">
+          <div style="font-weight:500;margin-bottom:.6rem;font-size:.88rem">Response Compression</div>
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Compress Responses</div>
+              <div class="toggle-sub">Enable gzip/brotli compression for HTTP responses</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="hdrCompress"><span class="slider"></span></label>
+          </div>
+          <div class="form-grid" style="margin-top:.8rem">
+            <div class="form-group">
+              <label>Min Size to Compress (bytes)</label>
+              <input type="number" id="hdrCompressMin" min="0" placeholder="1024">
+            </div>
+            <div class="form-group">
+              <label>Compress Types (one per line)</label>
+              <textarea id="hdrCompressTypes" rows="4" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="text/html&#10;text/css&#10;application/javascript&#10;application/json"></textarea>
+            </div>
+          </div>
+        </div>
         <div class="save-row">
           <button class="btn btn-primary" onclick="saveHeaders()">Save Header Settings</button>
           <span class="save-ok" id="hdrOk">Saved.</span>
@@ -313,6 +334,84 @@
         </div>
       </div>
     </div>
+
+    <!-- Tab: ACL -->
+    <div id="tab-acl" class="tab-panel">
+      <div class="form-panel">
+        <p style="margin:0 0 1rem;font-size:.85rem;color:var(--muted)">Global ACL applied to all incoming connections. Domain and path rules apply to HTTP traffic only.</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Default Action</label>
+            <select id="aclDefault">
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
+            </select>
+          </div>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">ACL Bypass WAF</div>
+            <div class="toggle-sub">When an IP is in the ACL allow list, skip WAF checks</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="aclBypassWaf"><span class="slider"></span></label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:1rem">
+          <div>
+            <div class="section-label" style="color:var(--success,#4ade80);margin-top:0">IP Allow</div>
+            <div class="tag-list" id="aclIpAllowList"></div>
+            <div class="add-inline">
+              <input type="text" id="aclIpAllowInput" placeholder="10.0.0.0/8">
+              <button class="btn btn-sm btn-primary" onclick="addAclIp('allow')">Add</button>
+            </div>
+          </div>
+          <div>
+            <div class="section-label" style="color:var(--danger,#f87171);margin-top:0">IP Block</div>
+            <div class="tag-list" id="aclIpBlockList"></div>
+            <div class="add-inline">
+              <input type="text" id="aclIpBlockInput" placeholder="203.0.113.0/24">
+              <button class="btn btn-sm btn-danger" onclick="addAclIp('block')">Add</button>
+            </div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:1rem">
+          <div>
+            <div class="section-label" style="color:var(--success,#4ade80);margin-top:0">Domain Allow</div>
+            <div class="tag-list" id="aclDomainAllowList"></div>
+            <div class="add-inline">
+              <input type="text" id="aclDomainAllowInput" placeholder="example.com">
+              <button class="btn btn-sm btn-primary" onclick="addAclDomain('allow')">Add</button>
+            </div>
+          </div>
+          <div>
+            <div class="section-label" style="color:var(--danger,#f87171);margin-top:0">Domain Block</div>
+            <div class="tag-list" id="aclDomainBlockList"></div>
+            <div class="add-inline">
+              <input type="text" id="aclDomainBlockInput" placeholder="badactor.com">
+              <button class="btn btn-sm btn-danger" onclick="addAclDomain('block')">Add</button>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:1.2rem">
+          <div style="font-weight:500;margin-bottom:.5rem;font-size:.88rem">Path Patterns</div>
+          <div style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem">Rules that allow or deny access based on URL path patterns. Evaluated in order.</div>
+          <div id="aclPatternList" style="display:flex;flex-direction:column;gap:.5rem;margin-bottom:.6rem"></div>
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+            <select id="aclPatternAction" style="width:6rem">
+              <option value="allow">allow</option>
+              <option value="deny">deny</option>
+            </select>
+            <input type="text" id="aclPatternInput" placeholder="/admin/* /api/internal/*" style="flex:1;min-width:180px">
+            <button class="btn btn-secondary" onclick="addAclPattern()">Add Pattern Rule</button>
+          </div>
+          <div style="font-size:.75rem;color:var(--muted);margin-top:.25rem">Space-separated glob patterns. Example: /admin/* /wp-login.php</div>
+        </div>
+        <div class="save-row">
+          <button class="btn btn-primary" onclick="saveAcl()">Save ACL Settings</button>
+          <span class="save-ok" id="aclOk">Saved.</span>
+          <span class="save-err" id="aclErr"></span>
+        </div>
+      </div>
+    </div>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -320,10 +419,11 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 
 var _geo = {block_countries:[], allow_countries:[]};
 var _bot = {known_good_bots:[]};
+var _acl = {ip_allow:[], ip_block:[], domain_allow:[], domain_block:[], path_patterns:[]};
 
 // ── Tab switching ────────────────────────────────────────────────────────────
 function switchTab(name) {
-  var tabs = ['tls','geo','headers','bot','cookies','ratelimit'];
+  var tabs = ['tls','geo','headers','bot','cookies','ratelimit','acl'];
   document.querySelectorAll('.tab').forEach(function(t, i){ t.classList.toggle('active', tabs[i] === name); });
   document.querySelectorAll('.tab-panel').forEach(function(p){ p.classList.remove('active'); });
   document.getElementById('tab-' + name).classList.add('active');
@@ -358,6 +458,9 @@ async function loadSettings() {
     document.getElementById('hdrXfo').value = d.headers.add_x_frame_options || '';
     document.getElementById('hdrReferer').value = d.headers.add_referrer_policy || '';
     document.getElementById('hdrCsp').value = d.headers.add_content_security_policy || '';
+    document.getElementById('hdrCompress').checked = !!d.headers.compress_responses;
+    document.getElementById('hdrCompressMin').value = d.headers.compress_min_size != null ? d.headers.compress_min_size : 1024;
+    document.getElementById('hdrCompressTypes').value = (d.headers.compress_types || []).join('\n');
 
     // Bot
     document.getElementById('botEnabled').checked = !!d.bot_detection.enabled;
@@ -375,6 +478,20 @@ async function loadSettings() {
 
     // Rate limits
     renderRateLimits(d.rate_limits || []);
+
+    // ACL
+    if (d.acl) {
+      document.getElementById('aclDefault').value = d.acl.default || 'allow';
+      document.getElementById('aclBypassWaf').checked = !!d.acl.acl_bypass_waf;
+      _acl.ip_allow    = (d.acl.ip && d.acl.ip.allow) || [];
+      _acl.ip_block    = (d.acl.ip && d.acl.ip.block) || [];
+      _acl.domain_allow = d.acl.domain_allow || [];
+      _acl.domain_block = d.acl.domain_block || [];
+      _acl.path_patterns = (d.acl.path_patterns || []).map(function(p){ return {action:p.action, patterns:p.patterns.slice()}; });
+      renderAclIps();
+      renderAclDomains();
+      renderAclPatterns();
+    }
   } catch(e) {
     document.getElementById('loadError').textContent = 'Failed to load security settings: ' + e.message;
     document.getElementById('loadError').style.display = '';
@@ -508,6 +625,7 @@ async function saveHeaders() {
   var xfo = document.getElementById('hdrXfo').value;
   var ref = document.getElementById('hdrReferer').value;
   var csp = document.getElementById('hdrCsp').value.trim();
+  var compressTypes = document.getElementById('hdrCompressTypes').value.split('\n').map(function(s){return s.trim();}).filter(Boolean);
   var body = {
     add_x_content_type_options: document.getElementById('hdrXcto').checked,
     remove_server_header: document.getElementById('hdrRmServer').checked,
@@ -515,6 +633,9 @@ async function saveHeaders() {
     add_x_frame_options: xfo || null,
     add_referrer_policy: ref || null,
     add_content_security_policy: csp || null,
+    compress_responses: document.getElementById('hdrCompress').checked,
+    compress_min_size: parseInt(document.getElementById('hdrCompressMin').value) || 1024,
+    compress_types: compressTypes,
   };
   try {
     var r = await fetch('/api/security/headers', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
@@ -553,6 +674,91 @@ async function saveCookies() {
     var d = await r.json();
     flash('ckOk','ckErr', r.ok, d.error);
   } catch(e){flash('ckOk','ckErr',false,'Request failed');}
+}
+
+// ── ACL helpers ──────────────────────────────────────────────────────────────
+function renderAclIps() {
+  ['allow','block'].forEach(function(type) {
+    var list = type==='allow' ? _acl.ip_allow : _acl.ip_block;
+    document.getElementById('aclIp'+cap(type)+'List').innerHTML = list.map(function(v,i){
+      return '<span class="tag">'+esc(v)+'<button onclick="removeAclIp(\''+type+'\','+i+')">✕</button></span>';
+    }).join('');
+  });
+}
+function addAclIp(type) {
+  var inp = document.getElementById('aclIp'+cap(type)+'Input');
+  var val = inp.value.trim();
+  if (!val) return;
+  var list = type==='allow' ? _acl.ip_allow : _acl.ip_block;
+  if (!list.includes(val)) { list.push(val); renderAclIps(); }
+  inp.value = '';
+}
+function removeAclIp(type, idx) {
+  if (type==='allow') _acl.ip_allow.splice(idx,1);
+  else _acl.ip_block.splice(idx,1);
+  renderAclIps();
+}
+
+function renderAclDomains() {
+  ['allow','block'].forEach(function(type) {
+    var list = type==='allow' ? _acl.domain_allow : _acl.domain_block;
+    document.getElementById('aclDomain'+cap(type)+'List').innerHTML = list.map(function(d,i){
+      return '<span class="tag">'+esc(d)+'<button onclick="removeAclDomain(\''+type+'\','+i+')">✕</button></span>';
+    }).join('');
+  });
+}
+function cap(s){return s.charAt(0).toUpperCase()+s.slice(1);}
+function addAclDomain(type) {
+  var inp = document.getElementById('aclDomain'+cap(type)+'Input');
+  var val = inp.value.trim();
+  if (!val) return;
+  var list = type==='allow' ? _acl.domain_allow : _acl.domain_block;
+  if (!list.includes(val)) { list.push(val); renderAclDomains(); }
+  inp.value = '';
+}
+function removeAclDomain(type, idx) {
+  if (type==='allow') _acl.domain_allow.splice(idx,1);
+  else _acl.domain_block.splice(idx,1);
+  renderAclDomains();
+}
+function renderAclPatterns() {
+  var cont = document.getElementById('aclPatternList');
+  cont.innerHTML = '';
+  _acl.path_patterns.forEach(function(p, i) {
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:.5rem;background:rgba(255,255,255,.04);padding:.4rem .6rem;border-radius:3px';
+    row.innerHTML = '<span style="font-size:.8rem;padding:.1rem .35rem;border-radius:2px;background:'+(p.action==='allow'?'rgba(74,222,128,.2)':'rgba(248,113,113,.2)')+'">'+esc(p.action)+'</span>'+
+      '<span style="flex:1;font-family:monospace;font-size:.82rem">'+esc(p.patterns.join(' '))+'</span>'+
+      '<button class="btn btn-sm btn-danger" onclick="removeAclPattern('+i+')">Remove</button>';
+    cont.appendChild(row);
+  });
+}
+function addAclPattern() {
+  var action = document.getElementById('aclPatternAction').value;
+  var raw = document.getElementById('aclPatternInput').value.trim();
+  if (!raw) return;
+  var patterns = raw.split(/\s+/).filter(Boolean);
+  _acl.path_patterns.push({action:action, patterns:patterns});
+  renderAclPatterns();
+  document.getElementById('aclPatternInput').value = '';
+}
+function removeAclPattern(i) {
+  _acl.path_patterns.splice(i,1);
+  renderAclPatterns();
+}
+async function saveAcl() {
+  var body = {
+    default: document.getElementById('aclDefault').value,
+    acl_bypass_waf: document.getElementById('aclBypassWaf').checked,
+    ip: {allow: _acl.ip_allow.slice(), block: _acl.ip_block.slice()},
+    domain: {allow: _acl.domain_allow.slice(), block: _acl.domain_block.slice()},
+    path_patterns: _acl.path_patterns.map(function(p){return {action:p.action, patterns:p.patterns.slice()};}),
+  };
+  try {
+    var r = await fetch('/api/security/acl', {method:'PUT', headers:authHeaders(), body:JSON.stringify(body)});
+    var d = await r.json();
+    flash('aclOk','aclErr', r.ok, d.error);
+  } catch(e){flash('aclOk','aclErr',false,'Request failed');}
 }
 
 initPage('security');

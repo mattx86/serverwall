@@ -14,22 +14,32 @@ use crate::state::AppState;
 #[derive(Deserialize)]
 pub struct LogQuery {
     frontend: Option<String>,
+    source: Option<String>,   // "daemon" | "webui"
 }
 
-/// GET /api/logs?frontend=NAME - stream log lines via Server-Sent Events
+/// GET /api/logs?frontend=NAME  or  ?source=daemon|webui
+/// Stream log lines via Server-Sent Events.
 pub async fn stream(
     State(state): State<AppState>,
     Query(params): Query<LogQuery>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, Infallible>>> {
     let config = state.config.load();
 
-    // Find log file path for the requested frontend (or first with a log file).
-    let log_path: Option<String> = params
-        .frontend
-        .as_deref()
-        .and_then(|name| config.frontend.iter().find(|f| f.name == name))
-        .and_then(|f| f.log_file.clone())
-        .or_else(|| config.frontend.iter().find_map(|f| f.log_file.clone()));
+    let log_path: Option<String> = if let Some(ref src) = params.source {
+        let log_dir = config.global.log_dir.to_string_lossy().into_owned();
+        match src.as_str() {
+            "daemon" => Some(format!("{}/serverwall.log", log_dir)),
+            "webui"  => Some(format!("{}/serverwall-webui.log", log_dir)),
+            _ => None,
+        }
+    } else {
+        params
+            .frontend
+            .as_deref()
+            .and_then(|name| config.frontend.iter().find(|f| f.name == name))
+            .and_then(|f| f.log_file.clone())
+            .or_else(|| config.frontend.iter().find_map(|f| f.log_file.clone()))
+    };
 
     drop(config);
 
@@ -40,7 +50,7 @@ pub async fn stream(
             Some(path) => tail_file(std::path::PathBuf::from(path), tx).await,
             None => {
                 let ev = Event::default()
-                    .data("{\"error\":\"no log file configured for this frontend\"}");
+                    .data("{\"error\":\"no log file configured for this source\"}");
                 let _ = tx.unbounded_send(Ok(ev));
             }
         }

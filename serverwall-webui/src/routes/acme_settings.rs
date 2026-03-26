@@ -20,6 +20,7 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
         "storage_dir": a.storage_dir,
         "auto_renew": a.auto_renew,
         "renew_before_days": a.renew_before_days,
+        "challenge_allowed_cidrs": a.challenge_allowed_cidrs,
     }))
 }
 

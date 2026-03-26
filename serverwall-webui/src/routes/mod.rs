@@ -19,6 +19,7 @@ pub mod log_profiles;
 pub mod relay;
 pub mod global_settings;
 pub mod acme_settings;
+pub mod webui_settings;
 
 use axum::{
     extract::{Request, State},
@@ -27,7 +28,9 @@ use axum::{
     Router,
 };
 use axum::http::HeaderValue;
+use tower_http::compression::CompressionLayer;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 
 use crate::middleware;
 use crate::state::AppState;
@@ -186,6 +189,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/security/cookies", axum::routing::put(security_settings::put_cookies))
         .route("/api/security/rate-limits", post(security_settings::add_rate_limit))
         .route("/api/security/rate-limits/{name}", axum::routing::delete(security_settings::remove_rate_limit))
+        .route("/api/security/acl", axum::routing::put(security_settings::put_acl))
         // Relay
         .route("/api/relay", get(relay::get).put(relay::update))
         .route("/api/relay/trusted-hosts", post(relay::trusted_host_add))
@@ -193,6 +197,7 @@ pub fn build_router(state: AppState) -> Router {
         // Global and ACME settings
         .route("/api/settings/global", get(global_settings::get).put(global_settings::update))
         .route("/api/settings/acme", get(acme_settings::get).put(acme_settings::update))
+        .route("/api/settings/webui", get(webui_settings::get).put(webui_settings::update))
         // System
         .route("/api/system/webui-cert", post(system::set_webui_cert))
         .route_layer(axum_middleware::from_fn_with_state(
@@ -207,6 +212,8 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(public_routes)
         .merge(api_routes)
+        .layer(TraceLayer::new_for_http())
+        .layer(CompressionLayer::new())
         .layer(cors)
         .with_state(state)
 }

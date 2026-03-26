@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +12,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 
+use crate::acl::IpMatcher;
 use crate::config::AcmeConfig;
 use crate::error::Result as CoreResult;
+
+/// A callable that inspects an HTTP request and returns `true` if it should be blocked.
+/// Arguments: method, uri, peer_ip, headers (lowercase names).
+pub type WafFn = Arc<dyn Fn(&str, &str, std::net::IpAddr, &HashMap<String, String>) -> bool + Send + Sync>;
 
 /// Manages automatic certificate provisioning via the ACME protocol.
 pub struct AcmeManager {
@@ -24,6 +30,9 @@ pub struct AcmeManager {
     email: Option<String>,
     /// Local path where the account credentials and certs are stored.
     storage_dir: PathBuf,
+    /// CIDR ranges allowed to connect to the HTTP-01 challenge server.
+    /// Empty = allow all.
+    allowed_cidrs: Vec<String>,
 }
 
 impl AcmeManager {
@@ -34,6 +43,7 @@ impl AcmeManager {
             directory_url: config.directory_url.clone(),
             email: config.email.clone(),
             storage_dir: config.storage_dir.clone(),
+            allowed_cidrs: config.challenge_allowed_cidrs.clone(),
         }
     }
 
@@ -57,6 +67,7 @@ impl AcmeManager {
         email: &str,
         cert_dir: &Path,
         challenge_port: u16,
+        waf: Option<WafFn>,
     ) -> anyhow::Result<()> {
         let account = self.load_or_create_account(email).await?;
 
@@ -84,11 +95,22 @@ impl AcmeManager {
             challenge_urls.push(challenge.url.clone());
         }
 
+        // Build IP allowlist for the challenge server.
+        let ip_matcher = if self.allowed_cidrs.is_empty() {
+            None
+        } else {
+            Some(
+                IpMatcher::new(&self.allowed_cidrs)
+                    .map_err(|e| anyhow::anyhow!("invalid ACME allowed CIDR: {e}"))?,
+            )
+        };
+
         // Spin up the temporary HTTP challenge server.
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let tm = token_map.clone();
-        let server_handle =
-            tokio::spawn(async move { challenge_server(tm, challenge_port, shutdown_rx).await });
+        let server_handle = tokio::spawn(async move {
+            challenge_server(tm, challenge_port, shutdown_rx, ip_matcher, waf).await
+        });
 
         // Small grace period for the server to start.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -200,6 +222,8 @@ async fn challenge_server(
     token_map: Arc<DashMap<String, String>>,
     port: u16,
     shutdown_rx: oneshot::Receiver<()>,
+    allowed: Option<IpMatcher>,
+    waf: Option<WafFn>,
 ) {
     let addr: std::net::SocketAddr = ([0, 0, 0, 0], port).into();
     let listener = match TcpListener::bind(addr).await {
@@ -218,9 +242,19 @@ async fn challenge_server(
         tokio::select! {
             _ = &mut shutdown => break,
             result = listener.accept() => {
-                if let Ok((stream, _)) = result {
+                if let Ok((stream, peer)) = result {
+                    if let Some(ref matcher) = allowed {
+                        if !matcher.matches(peer.ip()) {
+                            tracing::warn!(
+                                peer = %peer,
+                                "ACME challenge server: connection refused (not a Let's Encrypt IP)",
+                            );
+                            continue;
+                        }
+                    }
                     let tm = token_map.clone();
-                    tokio::spawn(async move { serve_challenge(stream, tm).await });
+                    let waf = waf.clone();
+                    tokio::spawn(async move { serve_challenge(stream, tm, peer, waf).await });
                 }
             }
         }
@@ -230,6 +264,8 @@ async fn challenge_server(
 async fn serve_challenge(
     stream: tokio::net::TcpStream,
     token_map: Arc<DashMap<String, String>>,
+    peer: std::net::SocketAddr,
+    waf: Option<WafFn>,
 ) {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -241,21 +277,50 @@ async fn serve_challenge(
 
     // "GET /path HTTP/1.1\r\n"
     let parts: Vec<&str> = request_line.split_whitespace().collect();
+    let method = if parts.len() >= 1 { parts[0] } else { "" };
     let path = if parts.len() >= 2 { parts[1] } else { "" };
+
+    // Read HTTP headers until the blank line.
+    let mut headers: HashMap<String, String> = HashMap::new();
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await.is_err() {
+            return;
+        }
+        let trimmed = line.trim_end_matches("\r\n").trim_end_matches('\n');
+        if trimmed.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = trimmed.split_once(':') {
+            headers.insert(name.trim().to_lowercase(), value.trim().to_string());
+        }
+    }
+
+    // WAF inspection — block if the engine says so.
+    if let Some(ref waf_fn) = waf {
+        if waf_fn(method, path, peer.ip(), &headers) {
+            tracing::warn!(peer = %peer, %path, "ACME challenge request blocked by WAF");
+            let _ = write_half.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n").await;
+            return;
+        }
+    }
 
     let prefix = "/.well-known/acme-challenge/";
     let response = if let Some(token) = path.strip_prefix(prefix) {
         if let Some(key_auth) = token_map.get(token) {
             let body = key_auth.value().clone();
+            tracing::info!(peer = %peer, %path, "ACME challenge token served (200)");
             format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
                 body.len(),
                 body
             )
         } else {
+            tracing::warn!(peer = %peer, %path, "ACME challenge token not found (404)");
             "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string()
         }
     } else {
+        tracing::debug!(peer = %peer, %path, "ACME challenge server: unexpected path (404)");
         "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_string()
     };
 

@@ -21,6 +21,7 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
         "cert_dir": g.cert_dir,
         "config_dir": g.config_dir,
         "log_level": g.log_level,
+        "graceful_drain_secs": g.graceful_drain_secs,
     }))
 }
 

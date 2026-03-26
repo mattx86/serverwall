@@ -6,6 +6,7 @@ use arc_swap::ArcSwap;
 use tokio::sync::{Mutex, RwLock};
 use tokio_rustls::TlsAcceptor;
 
+use serverwall_core::acl::IpMatcher;
 use serverwall_core::config::ServerWallConfig;
 use serverwall_relay::queue::FilesystemSpool;
 use serverwall_relay::status::QueueStats;
@@ -25,6 +26,8 @@ pub struct AppState {
     pub tls_acceptor: Option<Arc<RwLock<TlsAcceptor>>>,
     /// WAF engine initialized from the "default" ruleset (or built-in defaults).
     pub waf_engine: Arc<WafEngine>,
+    /// Live-swappable IP allowlist for the WebUI.
+    pub ip_allow: Arc<ArcSwap<IpMatcher>>,
 }
 
 impl AppState {
@@ -39,6 +42,12 @@ impl AppState {
                 FilesystemSpool::new(PathBuf::from("/tmp/serverwall-spool"))
                     .expect("failed to create fallback spool directory")
             });
+
+        let ip_allow = {
+            let matcher = IpMatcher::new(&config.webui.allow_list)
+                .unwrap_or_else(|_| IpMatcher::new(&["0.0.0.0/0".to_string(), "::/0".to_string()]).unwrap());
+            Arc::new(ArcSwap::from_pointee(matcher))
+        };
 
         // Build WAF engine from the "default" ruleset in config, or use built-in defaults.
         let waf_engine = {
@@ -59,6 +68,7 @@ impl AppState {
             jwt_secret: generate_jwt_secret(),
             tls_acceptor,
             waf_engine,
+            ip_allow,
         }
     }
 
@@ -78,7 +88,10 @@ impl AppState {
         };
         match serverwall_core::config::load_config_from_str(&raw) {
             Ok(cfg) => {
+                let matcher = IpMatcher::new(&cfg.webui.allow_list)
+                    .unwrap_or_else(|_| IpMatcher::new(&["0.0.0.0/0".to_string(), "::/0".to_string()]).unwrap());
                 self.config.store(Arc::new(cfg));
+                self.ip_allow.store(Arc::new(matcher));
                 tracing::info!("webui: in-memory config reloaded from disk");
             }
             Err(e) => {

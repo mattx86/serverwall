@@ -10,6 +10,8 @@ use serde_json::{json, Value};
 
 use serverwall_core::{send_reload_signal, DEFAULT_PID_FILE};
 use serverwall_core::tls::AcmeManager;
+use serverwall_core::tls::acme::WafFn;
+use serverwall_waf::{HttpRequestContext, WafEngine, WafMode};
 
 use crate::state::AppState;
 
@@ -298,7 +300,19 @@ pub async fn acme_request(
     drop(config);
 
     let manager = AcmeManager::new(&acme_cfg);
-    match manager.order_one(&req.domain, &req.email, &cert_dir, req.challenge_port).await {
+    let waf_engine = std::sync::Arc::new(WafEngine::new(WafMode::Blocking));
+    let waf_fn: WafFn = std::sync::Arc::new(move |method, uri, peer_ip, headers| {
+        let ctx = HttpRequestContext::from_parts(
+            method,
+            uri,
+            headers.clone(),
+            vec![],
+            peer_ip,
+            None,
+        );
+        waf_engine.inspect(&ctx).decision.is_blocked()
+    });
+    match manager.order_one(&req.domain, &req.email, &cert_dir, req.challenge_port, Some(waf_fn)).await {
         Ok(()) => {
             state.reload_config();
             (

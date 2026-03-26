@@ -14,4 +14,7 @@ pub const DEFAULT_CONFIG_PATH: &str = "/opt/serverwall/etc/serverwall.toml";
 /// Default path to the serverwall PID file.
 pub const DEFAULT_PID_FILE: &str = "/opt/serverwall/run/serverwall.pid";
 
+/// Default path to the serverwall-webui PID file.
+pub const DEFAULT_WEBUI_PID_FILE: &str = "/opt/serverwall/run/serverwall-webui.pid";
+
 pub use config::send_reload_signal;

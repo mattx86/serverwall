@@ -50,6 +50,10 @@ pub struct GlobalConfig {
     pub config_dir: Option<PathBuf>, // conf.d/ drop-in directory
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// Seconds to wait for active connections to drain on graceful shutdown (SIGTERM).
+    /// 0 = disable drain (exit immediately). Default: 30.
+    #[serde(default = "default_drain_timeout")]
+    pub graceful_drain_secs: u64,
 }
 
 // =============================================================================
@@ -72,6 +76,8 @@ pub struct WebuiConfig {
     pub web_users_file: PathBuf,
     #[serde(default)]
     pub allowed_origins: Vec<String>,
+    #[serde(default = "default_webui_allow_list")]
+    pub allow_list: Vec<String>,
 }
 
 // =============================================================================
@@ -94,6 +100,12 @@ pub struct AcmeConfig {
     pub auto_renew: bool,
     #[serde(default = "default_renew_days")]
     pub renew_before_days: u32,
+    /// CIDR ranges allowed to reach the HTTP-01 challenge server on the challenge port.
+    /// Defaults to Let's Encrypt's known validation IPs.  Set to an empty list to allow all.
+    /// See https://letsencrypt.org/docs/faq/ for the current list (including multi-perspective
+    /// vantage points); add any additional ranges required by your ACME provider.
+    #[serde(default = "default_acme_allowed_cidrs")]
+    pub challenge_allowed_cidrs: Vec<String>,
 }
 
 // =============================================================================
@@ -451,6 +463,15 @@ pub struct SecurityHeadersConfig {
     pub remove_server_header: bool,
     #[serde(default = "default_true")]
     pub remove_x_powered_by: bool,
+    /// Compress responses with gzip when the client sends `Accept-Encoding: gzip`.
+    #[serde(default)]
+    pub compress_responses: bool,
+    /// Minimum response body size in bytes before compression is applied.
+    #[serde(default = "default_compress_min_size")]
+    pub compress_min_size: usize,
+    /// `Content-Type` prefixes eligible for compression.
+    #[serde(default = "default_compress_types")]
+    pub compress_types: Vec<String>,
 }
 
 impl Default for SecurityHeadersConfig {
@@ -462,6 +483,9 @@ impl Default for SecurityHeadersConfig {
             add_content_security_policy: None,
             remove_server_header: true,
             remove_x_powered_by: true,
+            compress_responses: false,
+            compress_min_size: default_compress_min_size(),
+            compress_types: default_compress_types(),
         }
     }
 }
@@ -1033,6 +1057,7 @@ pub enum ProtocolType {
     SmtpStarttls,
     Imaps,
     Tcp,
+    Stratum,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1078,6 +1103,7 @@ pub enum HealthCheckType {
     Http,
     Smtp,
     Imap,
+    Stratum,
 }
 
 // =============================================================================
@@ -1089,7 +1115,9 @@ fn default_max_connections() -> usize { 65536 }
 fn default_log_dir() -> PathBuf { PathBuf::from("/opt/serverwall/var/log") }
 fn default_cert_dir() -> PathBuf { PathBuf::from("/opt/serverwall/etc/certs") }
 fn default_log_level() -> String { "info".into() }
+fn default_drain_timeout() -> u64 { 30 }
 fn default_webui_listen() -> String { "0.0.0.0:8443".into() }
+fn default_webui_allow_list() -> Vec<String> { vec!["0.0.0.0/0".to_string(), "::/0".to_string()] }
 fn default_webui_cert() -> Option<PathBuf> { Some(PathBuf::from("/opt/serverwall/etc/certs/webui.pem")) }
 fn default_webui_key() -> Option<PathBuf> { Some(PathBuf::from("/opt/serverwall/etc/certs/webui-key.pem")) }
 fn default_tokens_file() -> PathBuf { PathBuf::from("/opt/serverwall/etc/api-tokens.toml") }
@@ -1097,7 +1125,22 @@ fn default_web_users_file() -> PathBuf { PathBuf::from("/opt/serverwall/etc/web-
 fn default_acme_directory() -> String { "https://acme-v02.api.letsencrypt.org/directory".into() }
 fn default_acme_challenge() -> String { "http-01".into() }
 fn default_acme_storage() -> PathBuf { PathBuf::from("/opt/serverwall/etc/acme") }
+fn default_acme_allowed_cidrs() -> Vec<String> {
+    vec![
+        "64.112.15.0/24".into(),  // ISRG / Let's Encrypt primary
+        "66.133.109.0/24".into(), // ISRG / Let's Encrypt secondary
+    ]
+}
 fn default_renew_days() -> u32 { 30 }
+fn default_compress_min_size() -> usize { 1024 }
+fn default_compress_types() -> Vec<String> {
+    vec![
+        "text/html".into(), "text/css".into(), "text/javascript".into(),
+        "text/plain".into(), "text/xml".into(),
+        "application/javascript".into(), "application/json".into(),
+        "application/xml".into(), "image/svg+xml".into(),
+    ]
+}
 fn default_tls_min_version() -> String { "1.2".into() }
 fn default_balance_method() -> BalanceMethod { BalanceMethod::RoundRobin }
 fn default_session_cookie() -> String { "_s".into() }
@@ -1188,6 +1231,7 @@ impl Default for GlobalConfig {
             cert_dir: default_cert_dir(),
             config_dir: None,
             log_level: default_log_level(),
+            graceful_drain_secs: default_drain_timeout(),
         }
     }
 }
@@ -1202,6 +1246,7 @@ impl Default for WebuiConfig {
             tokens_file: default_tokens_file(),
             web_users_file: default_web_users_file(),
             allowed_origins: Vec::new(),
+            allow_list: default_webui_allow_list(),
         }
     }
 }
@@ -1216,6 +1261,7 @@ impl Default for AcmeConfig {
             storage_dir: default_acme_storage(),
             auto_renew: true,
             renew_before_days: default_renew_days(),
+            challenge_allowed_cidrs: default_acme_allowed_cidrs(),
         }
     }
 }

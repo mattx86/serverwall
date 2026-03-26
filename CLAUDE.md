@@ -111,6 +111,34 @@ Key config sections:
     └── serverwall.pid      # Daemon PID file
 ```
 
+## CLI/WebUI Configuration Parity
+
+**Rule:** Every field in every config section of `schema.rs` MUST be configurable via both `serverwallctl` and the WebUI. This is a hard requirement — no field may be write-only from one interface.
+
+**Exception — CLI-only (bootstrapping constraint):** `WebuiConfig` connection fields (`listen`, `tls_cert`, `tls_key`, `tokens_file`, `web_users_file`, `allowed_origins`, `enabled`) can only be set via the CLI. The WebUI cannot safely modify its own TLS/network settings while it is running.
+
+**When adding a schema field:**
+1. Add an editor function in `serverwall-core/src/config/editor.rs`
+2. Add a CLI flag/subcommand in `serverwall-cli/src/commands/`
+3. Add a WebUI form field + route handler update in `serverwall-webui/`
+All three in the same PR.
+
+**Command-to-section mapping:**
+- `serverwallctl global` → `[global]`
+- `serverwallctl acme` → `[acme]`
+- `serverwallctl security` → `[security]` (TLS, GeoIP, headers, bot detection, cookies, rate limits, ACL)
+- `serverwallctl security-profile` → `[[security_profiles]]`
+- `serverwallctl log-profile` → `[[log_profiles]]`
+- `serverwallctl relay` → `[relay]` (including bounce, outbound policy, trusted hosts, TLS, retry)
+- `serverwallctl dmarc` → `[dmarc_publish]`
+- `serverwallctl spf` → `[spf_publish]`
+- `serverwallctl frontend` → `[[frontend]]` (full CRUD including `add` and `update`)
+- `serverwallctl backend` → `[[backend_pool]]` (full CRUD including `add-pool`, `update-pool`, `add-server`)
+- `serverwallctl antispam` → `[antispam]` (full subcommand model — all checks, all lists, DNSBL/SURBL, scanners, domain overrides)
+- `serverwallctl webui` → `[webui]` (CLI-only fields)
+
+**`serverwallctl antispam` covers everything `GET/PUT /api/antispam/*` covers** — including SPF severity weights (`--spf-fail-weight`, `--spf-softfail-weight`, etc.) and residential SPF `neutral_triggers`.
+
 ## Style Guidelines
 
 - Use `thiserror` for library error types, `anyhow` in binaries

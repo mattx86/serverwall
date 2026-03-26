@@ -40,3 +40,5 @@ argon2 = { workspace = true }
 openssl = { workspace = true }
 if-addrs = { workspace = true }
 regex = { workspace = true }
+socket2 = { workspace = true }
+flate2 = { workspace = true }

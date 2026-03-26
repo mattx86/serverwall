@@ -51,6 +51,10 @@
             <option value="4">4 — Very Strict</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>Custom Rules Directory (optional path)</label>
+          <input type="text" id="wRulesDir" placeholder="/opt/serverwall/etc/waf-rules/strict">
+        </div>
       </div>
       <div id="wError" class="form-error" style="display:none"></div>
       <div class="form-actions">
@@ -85,6 +89,10 @@
             <option value="3">3 — Strict</option>
             <option value="4">4 — Very Strict</option>
           </select>
+        </div>
+        <div class="form-group">
+          <label>Custom Rules Directory (optional path)</label>
+          <input type="text" id="eRulesDir" placeholder="/opt/serverwall/etc/waf-rules/strict">
         </div>
       </div>
 
@@ -268,9 +276,10 @@ function showEditForm(r, view) {
   document.getElementById('eMode').value      = r.mode || 'blocking';
   document.getElementById('eThreshold').value = r.anomaly_threshold || 5;
   document.getElementById('eParanoia').value  = r.paranoia_level || 1;
+  document.getElementById('eRulesDir').value  = r.rules_dir || '';
 
   var disabled = !!view;
-  ['eMode','eThreshold','eParanoia','eExclPathInput','eExclIPInput','addRuleBtn'].forEach(function(id) {
+  ['eMode','eThreshold','eParanoia','eRulesDir','eExclPathInput','eExclIPInput','addRuleBtn'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.disabled = disabled;
   });
@@ -338,11 +347,13 @@ async function submitAddRuleset() {
   var errEl = document.getElementById('wError');
   if (!name) { errEl.textContent = 'Name is required.'; errEl.style.display = ''; return; }
 
+  var rulesDir = document.getElementById('wRulesDir').value.trim();
   var body = {
     name: name,
     mode: document.getElementById('wMode').value,
     anomaly_threshold: parseInt(document.getElementById('wThreshold').value) || 5,
     paranoia_level: parseInt(document.getElementById('wParanoia').value) || 1,
+    rules_dir: rulesDir || null,
     custom_rules: [],
     exclusions: { paths: [], ip_addresses: [] },
   };
@@ -359,11 +370,13 @@ async function submitAddRuleset() {
 async function submitEditRuleset() {
   var name  = document.getElementById('editWafNameHidden').value;
   var errEl = document.getElementById('eError');
+  var eRulesDir = document.getElementById('eRulesDir').value.trim();
   var body = {
     name: name,
     mode: document.getElementById('eMode').value,
     anomaly_threshold: parseInt(document.getElementById('eThreshold').value) || 5,
     paranoia_level: parseInt(document.getElementById('eParanoia').value) || 1,
+    rules_dir: eRulesDir || null,
     custom_rules: collectRules(),
     exclusions: { paths: _exclPaths, ip_addresses: _exclIPs },
   };

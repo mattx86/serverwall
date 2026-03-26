@@ -38,6 +38,11 @@ impl TlsListenerTask {
         }
     }
 
+    /// Return a clone of the active-connection counter for external monitoring / drain.
+    pub fn active_connections(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        self.tcp.active_connections()
+    }
+
     /// Bind, accept, perform TLS handshake, and dispatch to the handler.
     ///
     /// For each accepted connection the `handler` closure is invoked with:

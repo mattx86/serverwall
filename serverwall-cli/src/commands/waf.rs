@@ -44,6 +44,23 @@ pub enum WafAction {
         #[arg(long, default_value = "1")]
         paranoia: u8,
     },
+    /// Update an existing WAF ruleset (only specified flags are changed).
+    Update {
+        /// Ruleset name to update.
+        name: String,
+        /// WAF mode: blocking, detection_only, or disabled.
+        #[arg(long)]
+        mode: Option<String>,
+        /// Anomaly score threshold.
+        #[arg(long)]
+        threshold: Option<u32>,
+        /// Paranoia level 1-4.
+        #[arg(long)]
+        paranoia: Option<u8>,
+        /// Path to custom rules directory (empty string to clear).
+        #[arg(long)]
+        rules_dir: Option<String>,
+    },
     /// Remove a WAF ruleset by name.
     Remove {
         /// Ruleset name.
@@ -116,6 +133,25 @@ pub fn run(config_path: &Path, args: WafArgs, no_reload: bool) -> anyhow::Result
             editor::add_waf_ruleset(config_path, ruleset)
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
             println!("WAF ruleset '{}' added.", name);
+            maybe_reload(no_reload);
+        }
+
+        WafAction::Update { name, mode, rules_dir, threshold, paranoia } => {
+            let config = load_config(config_path)?;
+            let mut ruleset = config.waf_ruleset.iter().find(|r| r.name == name)
+                .ok_or_else(|| anyhow::anyhow!("WAF ruleset '{}' not found", name))?
+                .clone();
+            if let Some(v) = mode      { ruleset.mode = parse_waf_mode(&v)?; }
+            if let Some(v) = threshold { ruleset.anomaly_threshold = v; }
+            if let Some(v) = paranoia  { ruleset.paranoia_level = v; }
+            ruleset.rules_dir = match rules_dir {
+                Some(ref s) if s.is_empty() => None,
+                Some(s) => Some(std::path::PathBuf::from(s)),
+                None => ruleset.rules_dir,
+            };
+            editor::update_waf_ruleset(config_path, &name, ruleset)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            println!("WAF ruleset '{}' updated.", name);
             maybe_reload(no_reload);
         }
 

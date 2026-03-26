@@ -38,8 +38,17 @@ fn main() {
         Command::Acl(args) => commands::acl::run(&cli.config, args, cli.no_reload),
         Command::Waf(args) => commands::waf::run(&cli.config, args, cli.no_reload),
         Command::Dkim(args) => commands::dkim::run(&cli.config, args, cli.no_reload),
-        Command::Antispam(args) => commands::antispam::run(&cli.config, args),
+        Command::Antispam(args) => commands::antispam::run(&cli.config, args, cli.no_reload),
         Command::Reload(_) => commands::reload::run(cli.no_reload),
+        Command::Webui(args) => commands::webui::run(&cli.config, args),
+        Command::Global(args) => commands::global::run(&cli.config, args, cli.no_reload),
+        Command::Acme(args) => commands::acme::run(&cli.config, args, cli.no_reload),
+        Command::Security(args) => commands::security::run(&cli.config, args, cli.no_reload),
+        Command::SecurityProfile(args) => commands::security_profile::run(&cli.config, args, cli.no_reload),
+        Command::LogProfile(args) => commands::log_profile::run(&cli.config, args, cli.no_reload),
+        Command::Relay(args) => commands::relay::run(&cli.config, args, cli.no_reload),
+        Command::Dmarc(args) => commands::dmarc::run(&cli.config, args, cli.no_reload),
+        Command::Spf(args) => commands::spf::run(&cli.config, args, cli.no_reload),
     };
 
     if let Err(e) = result {

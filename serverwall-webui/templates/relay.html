@@ -94,6 +94,39 @@
           </div>
         </div>
         <div style="margin-top:1rem">
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Block Dangerous Attachments</div>
+              <div class="toggle-sub">Reject messages with potentially dangerous attachment types (.exe, .scr, etc.)</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="relayBlockDangerousAttach"><span class="slider"></span></label>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Check URLs in Messages</div>
+              <div class="toggle-sub">Verify URLs against SURBL/URL blacklists during outbound delivery</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="relayCheckUrls"><span class="slider"></span></label>
+          </div>
+        </div>
+        <div style="margin-top:1rem;border-top:1px solid rgba(255,255,255,.07);padding-top:.8rem">
+          <div style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.6rem">Bounce Configuration</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Bounce Sender Address (optional)</label>
+              <input type="text" id="relayBounceSender" placeholder="postmaster@example.com">
+              <div style="font-size:.75rem;color:var(--muted);margin-top:.25rem">Envelope From for bounce/DSN messages. Leave empty to use empty sender (&lt;&gt;).</div>
+            </div>
+          </div>
+          <div class="toggle-row">
+            <div>
+              <div class="toggle-label">Include Original Headers in Bounces</div>
+              <div class="toggle-sub">Include original message headers in bounce/DSN notifications</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="relayBounceOrigHeaders"><span class="slider"></span></label>
+          </div>
+        </div>
+        <div style="margin-top:1rem">
           <div style="font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:.4rem">Retry Schedule</div>
           <div class="form-grid">
             <div class="form-group">
@@ -104,6 +137,11 @@
               <label>Max Attempts</label>
               <input type="number" id="relayRetryMaxAttempts" min="1" placeholder="20">
             </div>
+          </div>
+          <div class="form-group" style="margin-top:.6rem">
+            <label>Retry Intervals (one duration per line, e.g. 5m, 15m, 1h)</label>
+            <textarea id="relayRetryIntervals" rows="4" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="5m&#10;15m&#10;1h&#10;4h&#10;8h"></textarea>
+            <div style="font-size:.75rem;color:var(--muted);margin-top:.2rem">Exponential back-off schedule. Supports s, m, h, d units. Leave blank to use daemon defaults.</div>
           </div>
         </div>
         <div class="save-row">
@@ -218,10 +256,15 @@ async function loadRelay(){
     document.getElementById('relayMaxMsgSize').value=(_relay.outbound_policy||{}).max_message_size||'';
     document.getElementById('relayMaxRecipients').value=(_relay.outbound_policy||{}).max_recipients_per_message||'';
     document.getElementById('relayMaxPerDomain').value=(_relay.outbound_policy||{}).max_messages_per_domain_per_hour||'';
+    document.getElementById('relayBlockDangerousAttach').checked=(_relay.outbound_policy||{}).block_dangerous_attachments!==false;
+    document.getElementById('relayCheckUrls').checked=!!(_relay.outbound_policy||{}).check_urls;
     _allowedDomains=((_relay.outbound_policy||{}).allowed_sender_domains)||[];
     renderAllowedDomains();
+    document.getElementById('relayBounceSender').value=(_relay.bounce||{}).sender||'';
+    document.getElementById('relayBounceOrigHeaders').checked=(_relay.bounce||{}).include_original_headers!==false;
     document.getElementById('relayRetryMaxAge').value=(_relay.retry||{}).max_age||'';
     document.getElementById('relayRetryMaxAttempts').value=(_relay.retry||{}).max_attempts||'';
+    document.getElementById('relayRetryIntervals').value=((_relay.retry||{}).intervals||[]).join('\n');
     // Trusted hosts
     document.getElementById('requireTls').checked=!!((_relay.trusted_hosts||{}).require_tls);
     renderTrustedHosts((_relay.trusted_hosts||{}).hosts||[]);
@@ -300,11 +343,23 @@ async function saveGeneral(){
       max_recipients_per_message:parseInt(document.getElementById('relayMaxRecipients').value)||(_relay.outbound_policy||{}).max_recipients_per_message,
       max_messages_per_domain_per_hour:parseInt(document.getElementById('relayMaxPerDomain').value)||0,
       allowed_sender_domains:_allowedDomains,
+      block_dangerous_attachments:document.getElementById('relayBlockDangerousAttach').checked,
+      check_urls:document.getElementById('relayCheckUrls').checked,
     }),
-    retry:Object.assign({},_relay.retry,{
-      max_age:parseInt(document.getElementById('relayRetryMaxAge').value)||(_relay.retry||{}).max_age,
-      max_attempts:parseInt(document.getElementById('relayRetryMaxAttempts').value)||(_relay.retry||{}).max_attempts,
-    }),
+    bounce:{
+      sender:document.getElementById('relayBounceSender').value.trim()||null,
+      include_original_headers:document.getElementById('relayBounceOrigHeaders').checked,
+    },
+    retry:Object.assign({},_relay.retry,(function(){
+      var raw=document.getElementById('relayRetryIntervals').value.trim();
+      var intervals=raw?raw.split('\n').map(function(s){return s.trim();}).filter(Boolean):undefined;
+      var obj={
+        max_age:parseInt(document.getElementById('relayRetryMaxAge').value)||(_relay.retry||{}).max_age,
+        max_attempts:parseInt(document.getElementById('relayRetryMaxAttempts').value)||(_relay.retry||{}).max_attempts,
+      };
+      if(intervals)obj.intervals=intervals;
+      return obj;
+    })()),
   });
   try{
     var r=await fetch('/api/relay',{method:'PUT',headers:authHeaders(),body:JSON.stringify(updated)});

@@ -7,7 +7,7 @@ mod server;
 use std::path::PathBuf;
 
 use clap::Parser;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use serverwall_core::config::{defaults, editor, load_config, schema::{WafExclusions, WafMode, WafRulesetConfig}};
 use serverwall_core::DEFAULT_CONFIG_PATH;
@@ -42,14 +42,17 @@ async fn main() -> anyhow::Result<()> {
     let config = load_config(&args.config)
         .map_err(|e| anyhow::anyhow!("failed to load config: {}", e))?;
 
-    // Initialize tracing
+    // Initialize tracing — stdout (ANSI) + file (no ANSI)
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(&config.global.log_level));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .with_thread_ids(true)
+    let file_appender = tracing_appender::rolling::never(&config.global.log_dir, "serverwall.log");
+    let (non_blocking, _file_guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout).with_ansi(true).with_target(true).with_thread_ids(true))
+        .with(tracing_subscriber::fmt::layer().with_writer(non_blocking).with_ansi(false).with_target(true).with_thread_ids(true))
         .init();
 
     tracing::info!(

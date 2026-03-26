@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use serverwall_core::config::schema::{
     BotDetectionConfig, CookieSecurityConfig, GeoConfig, RateLimitConfig, RateLimitScope,
-    SecurityHeadersConfig, SecurityTlsConfig,
+    SecurityAclConfig, SecurityHeadersConfig, SecurityTlsConfig,
 };
 use serverwall_core::{config::editor, send_reload_signal, DEFAULT_PID_FILE};
 
@@ -43,6 +43,9 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
             "add_content_security_policy": s.headers.add_content_security_policy,
             "remove_server_header": s.headers.remove_server_header,
             "remove_x_powered_by": s.headers.remove_x_powered_by,
+            "compress_responses": s.headers.compress_responses,
+            "compress_min_size": s.headers.compress_min_size,
+            "compress_types": s.headers.compress_types,
         },
         "bot_detection": {
             "enabled": s.bot_detection.enabled,
@@ -56,6 +59,20 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
             "enforce_httponly_flag": s.cookies.enforce_httponly_flag,
             "enforce_samesite": s.cookies.enforce_samesite,
             "max_cookie_size": s.cookies.max_cookie_size,
+        },
+        "acl": {
+            "default": serde_json::to_value(&s.acl.default).unwrap_or(json!("allow")),
+            "acl_bypass_waf": s.acl.acl_bypass_waf,
+            "ip": {
+                "allow": s.acl.ip.allow,
+                "block": s.acl.ip.block,
+            },
+            "domain_allow": s.acl.domain.allow,
+            "domain_block": s.acl.domain.block,
+            "path_patterns": s.acl.path_patterns.iter().map(|p| json!({
+                "action": p.action,
+                "patterns": p.patterns,
+            })).collect::<Vec<_>>(),
         },
         "rate_limits": s.rate_limit.iter().map(|r| json!({
             "name": r.name,
@@ -150,6 +167,9 @@ pub struct HeadersBody {
     pub add_content_security_policy: Option<Option<String>>,
     pub remove_server_header: Option<bool>,
     pub remove_x_powered_by: Option<bool>,
+    pub compress_responses: Option<bool>,
+    pub compress_min_size: Option<usize>,
+    pub compress_types: Option<Vec<String>>,
 }
 
 /// PUT /api/security/headers
@@ -168,6 +188,9 @@ pub async fn put_headers(
         add_content_security_policy: body.add_content_security_policy.unwrap_or(current.add_content_security_policy),
         remove_server_header: body.remove_server_header.unwrap_or(current.remove_server_header),
         remove_x_powered_by: body.remove_x_powered_by.unwrap_or(current.remove_x_powered_by),
+        compress_responses: body.compress_responses.unwrap_or(current.compress_responses),
+        compress_min_size: body.compress_min_size.unwrap_or(current.compress_min_size),
+        compress_types: body.compress_types.unwrap_or(current.compress_types),
     };
     apply(editor::update_security_headers(&state.config_path, updated), &state)
 }
@@ -277,6 +300,18 @@ pub async fn remove_rate_limit(
         }
         Err(e) => (StatusCode::NOT_FOUND, Json(json!({"error": e.to_string()}))),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Security ACL
+// ---------------------------------------------------------------------------
+
+/// PUT /api/security/acl
+pub async fn put_acl(
+    State(state): State<AppState>,
+    Json(acl): Json<SecurityAclConfig>,
+) -> (StatusCode, Json<Value>) {
+    apply(editor::update_security_acl(&state.config_path, acl), &state)
 }
 
 // ---------------------------------------------------------------------------

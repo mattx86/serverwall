@@ -478,6 +478,45 @@ async fn handle_request(
         }
     };
 
+    // Proxy-side gzip compression
+    let wants_gzip = header_map
+        .get("accept-encoding")
+        .map(|v| v.contains("gzip"))
+        .unwrap_or(false);
+    let backend_has_encoding = parts.headers.contains_key("content-encoding");
+    let content_type = parts.headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let compressible_type = security_headers.compress_types
+        .iter()
+        .any(|t| content_type.starts_with(t.as_str()));
+    let should_compress = security_headers.compress_responses
+        && wants_gzip
+        && !backend_has_encoding
+        && compressible_type
+        && resp_body.len() >= security_headers.compress_min_size;
+
+    let (resp_body, did_compress) = if should_compress {
+        use flate2::write::GzEncoder;
+        use flate2::Compression as GzCompression;
+        use std::io::Write;
+        let result = (|| {
+            let mut enc = GzEncoder::new(Vec::new(), GzCompression::default());
+            enc.write_all(&resp_body)?;
+            enc.finish()
+        })();
+        match result {
+            Ok(compressed) => (Bytes::from(compressed), true),
+            Err(e) => {
+                tracing::warn!(error = %e, "gzip compression failed, sending uncompressed");
+                (resp_body, false)
+            }
+        }
+    } else {
+        (resp_body, false)
+    };
+
     let mut response = Response::builder().status(parts.status).version(hyper::Version::HTTP_11);
 
     // Copy response headers, removing hop-by-hop and server identification headers
@@ -491,6 +530,10 @@ async fn handle_request(
 
         // Strip server identification headers; we add our own Server header below.
         if lower == "server" {
+            continue;
+        }
+        // Skip Content-Length from backend when we've rewritten the body via compression.
+        if lower == "content-length" && did_compress {
             continue;
         }
         if lower == "x-powered-by" && security_headers.remove_x_powered_by {
@@ -547,6 +590,12 @@ async fn handle_request(
         let mut hsts = format!("max-age={}", max_age);
         if hsts_include_subdomains { hsts.push_str("; includeSubDomains"); }
         response = response.header("Strict-Transport-Security", hsts);
+    }
+
+    if did_compress {
+        response = response.header("Content-Encoding", "gzip");
+        response = response.header("Vary", "Accept-Encoding");
+        response = response.header("Content-Length", resp_body.len().to_string());
     }
 
     let resp_body_len = resp_body.len() as u64;

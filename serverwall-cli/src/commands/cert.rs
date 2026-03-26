@@ -28,6 +28,21 @@ pub enum CertAction {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Generate a self-signed certificate and key into the cert directory.
+    GenerateSelfSigned {
+        /// Common Name (CN) for the certificate (typically the server hostname).
+        #[arg(long)]
+        cn: String,
+        /// Output cert filename relative to the cert directory (default: <cn>.pem).
+        #[arg(long)]
+        out_cert: Option<String>,
+        /// Output key filename relative to the cert directory (default: <cn>-key.pem).
+        #[arg(long)]
+        out_key: Option<String>,
+        /// Additional IP addresses to include in Subject Alternative Names (comma-separated).
+        #[arg(long, value_delimiter = ',')]
+        extra_ips: Vec<String>,
+    },
 }
 
 pub fn run(config_path: &Path, args: CertArgs) -> anyhow::Result<()> {
@@ -92,6 +107,27 @@ pub fn run(config_path: &Path, args: CertArgs) -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!("failed to copy cert: {}", e))?;
             println!("Imported {} → {}", path, dest.display());
             println!("Run `serverwallctl reload` to apply.");
+        }
+
+        CertAction::GenerateSelfSigned { cn, out_cert, out_key, extra_ips } => {
+            std::fs::create_dir_all(cert_dir)
+                .map_err(|e| anyhow::anyhow!("failed to create cert dir: {}", e))?;
+
+            let cert_name = out_cert.unwrap_or_else(|| format!("{}.pem", cn));
+            let key_name = out_key.unwrap_or_else(|| format!("{}-key.pem", cn));
+            let cert_path = cert_dir.join(&cert_name);
+            let key_path  = cert_dir.join(&key_name);
+
+            // Parse extra IPs
+            let ips: Vec<std::net::IpAddr> = extra_ips.iter()
+                .map(|s| s.parse().map_err(|e| anyhow::anyhow!("invalid IP '{}': {}", s, e)))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+
+            serverwall_core::tls::generate_self_signed_cert(&cert_path, &key_path, &cn, &ips)
+                .map_err(|e| anyhow::anyhow!("certificate generation failed: {}", e))?;
+
+            println!("Certificate written to: {}", cert_path.display());
+            println!("Private key written to: {}", key_path.display());
         }
     }
     Ok(())

@@ -90,6 +90,10 @@ pub struct GlobalSettingsPage;
 pub struct AcmeSettingsPage;
 
 #[derive(Template)]
+#[template(path = "webui-settings.html")]
+pub struct WebuiSettingsPage;
+
+#[derive(Template)]
 #[template(path = "logs.html")]
 pub struct LogsPage;
 
@@ -126,6 +130,7 @@ pub fn render_page(path: &str) -> Option<String> {
         "spf.html"                   => SpfPage.render().ok(),
         "global-settings.html"       => GlobalSettingsPage.render().ok(),
         "acme-settings.html"         => AcmeSettingsPage.render().ok(),
+        "webui-settings.html"        => WebuiSettingsPage.render().ok(),
         "logs.html"                  => LogsPage.render().ok(),
         "queue.html"                 => QueuePage.render().ok(),
         "antispam.html"              => AntispamPage.render().ok(),

@@ -63,6 +63,16 @@
         <label class="switch"><input type="checkbox" id="acmeAutoRenew"><span class="slider"></span></label>
       </div>
 
+      <div style="margin-top:1.2rem">
+        <label style="display:block;margin-bottom:.4rem;font-size:.88rem">Challenge Allowed CIDRs</label>
+        <div style="font-size:.75rem;color:var(--muted);margin-bottom:.5rem">IP ranges permitted to reach the ACME HTTP-01 challenge endpoint. Leave empty to allow all.</div>
+        <div id="acmeCidrList" style="display:flex;flex-direction:column;gap:.35rem;margin-bottom:.4rem"></div>
+        <div style="display:flex;gap:.4rem">
+          <input type="text" id="acmeCidrInput" placeholder="e.g. 0.0.0.0/0 or 2600::/12" style="flex:1;max-width:320px">
+          <button class="btn btn-secondary" onclick="addCidr()">Add CIDR</button>
+        </div>
+      </div>
+
       <div class="save-row">
         <button class="btn btn-primary" onclick="save()">Save Settings</button>
         <span class="save-ok" id="saveOk">Saved.</span>
@@ -72,11 +82,37 @@
 {% endblock %}
 {% block scripts %}
 <script>
+var cidrList = [];
+
 function setSelect(id, val) {
   var el = document.getElementById(id);
   for (var i = 0; i < el.options.length; i++) {
     if (el.options[i].value === val) { el.selectedIndex = i; return; }
   }
+}
+
+function renderCidrs() {
+  var cont = document.getElementById('acmeCidrList');
+  cont.innerHTML = '';
+  cidrList.forEach(function(c, i) {
+    var row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:.4rem';
+    row.innerHTML = '<span style="flex:1;font-family:monospace;font-size:.85rem">' + c + '</span>' +
+      '<button class="btn btn-danger btn-sm" onclick="removeCidr(' + i + ')">Remove</button>';
+    cont.appendChild(row);
+  });
+}
+
+function addCidr() {
+  var val = document.getElementById('acmeCidrInput').value.trim();
+  if (!val) return;
+  if (!cidrList.includes(val)) { cidrList.push(val); renderCidrs(); }
+  document.getElementById('acmeCidrInput').value = '';
+}
+
+function removeCidr(i) {
+  cidrList.splice(i, 1);
+  renderCidrs();
 }
 
 async function load() {
@@ -91,6 +127,8 @@ async function load() {
     document.getElementById('acmeStorage').value     = d.storage_dir || '';
     document.getElementById('acmeAutoRenew').checked = !!d.auto_renew;
     document.getElementById('acmeRenewDays').value   = d.renew_before_days != null ? d.renew_before_days : 30;
+    cidrList = Array.isArray(d.challenge_allowed_cidrs) ? d.challenge_allowed_cidrs.slice() : [];
+    renderCidrs();
   } catch(e) {
     document.getElementById('loadError').textContent = 'Failed to load: ' + e.message;
     document.getElementById('loadError').style.display = '';
@@ -107,13 +145,14 @@ async function save() {
   var emailVal   = document.getElementById('acmeEmail').value.trim();
 
   var body = {
-    enabled:           document.getElementById('acmeEnabled').checked,
-    email:             emailVal || null,
-    directory_url:     dirVal || null,
-    challenge_type:    document.getElementById('acmeChallengeType').value,
-    storage_dir:       storageVal || null,
-    auto_renew:        document.getElementById('acmeAutoRenew').checked,
-    renew_before_days: parseInt(document.getElementById('acmeRenewDays').value) || 30,
+    enabled:                  document.getElementById('acmeEnabled').checked,
+    email:                    emailVal || null,
+    directory_url:            dirVal || null,
+    challenge_type:           document.getElementById('acmeChallengeType').value,
+    storage_dir:              storageVal || null,
+    auto_renew:               document.getElementById('acmeAutoRenew').checked,
+    renew_before_days:        parseInt(document.getElementById('acmeRenewDays').value) || 30,
+    challenge_allowed_cidrs:  cidrList.slice(),
   };
 
   try {

@@ -5,8 +5,8 @@ use crate::config::schema::{
     AcmeConfig, AntispamConfig, BackendConfig, BackendPoolConfig, BotDetectionConfig,
     CookieSecurityConfig, DkimDomainConfig, DmarcPolicyDomain, DnsblListEntry, DomainOverride,
     FrontendConfig, GeoConfig, GlobalConfig, LogProfile, RateLimitConfig, RelayConfig,
-    ScannerConfig, SecurityHeadersConfig, SecurityProfile, SecurityTlsConfig, SpfDomainConfig,
-    WafRulesetConfig,
+    ScannerConfig, SecurityAclConfig, SecurityHeadersConfig, SecurityProfile, SecurityTlsConfig,
+    SpfDomainConfig, WafRulesetConfig, WebuiConfig,
 };
 use crate::config::writer::write_config_atomic;
 use crate::error::{Result, ServerWallError};
@@ -449,6 +449,12 @@ pub fn update_antispam_checks(path: &Path, update: AntispamChecksUpdate) -> Resu
         if let Some(v) = c.on_scanner_error    { a.antivirus.on_scanner_error    = v; }
         if let Some(v) = c.on_scanner_timeout  { a.antivirus.on_scanner_timeout  = v; }
     }
+    if let Some(c) = update.spf_severity {
+        if let Some(v) = c.fail     { a.spf.severity.fail     = v; }
+        if let Some(v) = c.softfail { a.spf.severity.softfail = v; }
+        if let Some(v) = c.neutral  { a.spf.severity.neutral  = v; }
+        if let Some(v) = c.none     { a.spf.severity.none     = v; }
+    }
     validate_config(&config)?;
     write_config_atomic(path, &config)
 }
@@ -476,6 +482,7 @@ pub struct AntispamChecksUpdate {
     pub ratio:            Option<CheckFieldUpdate>,
     pub residential_spf:  Option<ResidentialSpfFieldUpdate>,
     pub antivirus:        Option<AntivirusFieldUpdate>,
+    pub spf_severity:     Option<SpfSeverityFieldUpdate>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -502,6 +509,14 @@ pub struct AntivirusFieldUpdate {
     pub reject_on_virus:    Option<bool>,
     pub on_scanner_error:   Option<String>,
     pub on_scanner_timeout: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SpfSeverityFieldUpdate {
+    pub fail:     Option<f64>,
+    pub softfail: Option<f64>,
+    pub neutral:  Option<f64>,
+    pub none:     Option<f64>,
 }
 
 /// Add a SURBL zone to the antispam URL analysis config.
@@ -891,3 +906,28 @@ pub fn remove_antispam_block_recipient(path: &Path, recipient: &str) -> Result<(
     validate_config(&config)?;
     write_config_atomic(path, &config)
 }
+
+/// Replace the WebUI IP allow list.
+pub fn update_webui_allow_list(path: &Path, allow: Vec<String>) -> Result<()> {
+    let mut config = load_config(path)?;
+    config.webui.allow_list = allow;
+    validate_config(&config)?;
+    write_config_atomic(path, &config)
+}
+
+/// Replace the entire WebUI configuration section.
+pub fn update_webui_config(path: &Path, webui: WebuiConfig) -> Result<()> {
+    let mut config = load_config(path)?;
+    config.webui = webui;
+    validate_config(&config)?;
+    write_config_atomic(path, &config)
+}
+
+/// Replace the security ACL sub-section (IP ACL, domain ACL, path patterns, default action).
+pub fn update_security_acl(path: &Path, acl: SecurityAclConfig) -> Result<()> {
+    let mut config = load_config(path)?;
+    config.security.acl = acl;
+    validate_config(&config)?;
+    write_config_atomic(path, &config)
+}
+

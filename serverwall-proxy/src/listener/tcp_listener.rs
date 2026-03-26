@@ -35,6 +35,11 @@ impl TcpListenerTask {
         }
     }
 
+    /// Return a clone of the active-connection counter for external monitoring / drain.
+    pub fn active_connections(&self) -> Arc<AtomicUsize> {
+        self.active_connections.clone()
+    }
+
     /// Bind to all configured addresses and accept connections in a loop.
     ///
     /// For each accepted connection the `handler` closure is invoked with:
@@ -60,7 +65,7 @@ impl TcpListenerTask {
         // Bind all listeners
         let mut listeners = Vec::new();
         for addr in &self.bind_addrs {
-            let listener = TcpListener::bind(addr).await?;
+            let listener = bind_reuseport(addr)?;
             let local_addr = listener.local_addr()?;
             tracing::info!(
                 frontend = %self.frontend_name,
@@ -288,4 +293,23 @@ impl TcpListenerTask {
             active.fetch_sub(1, Ordering::Relaxed);
         });
     }
+}
+
+/// Bind a TCP listener with `SO_REUSEPORT` (Unix) so a new process instance can
+/// bind the same address while the old one is still draining connections.
+/// Falls back to `SO_REUSEADDR`-only on non-Unix platforms.
+fn bind_reuseport(addr: &str) -> anyhow::Result<TcpListener> {
+    let sock_addr: std::net::SocketAddr = addr.parse()?;
+    let socket = socket2::Socket::new(
+        if sock_addr.is_ipv6() { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 },
+        socket2::Type::STREAM,
+        None,
+    )?;
+    socket.set_reuse_address(true)?;
+    #[cfg(unix)]
+    socket.set_reuse_port(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&sock_addr.into())?;
+    socket.listen(1024)?;
+    Ok(TcpListener::from_std(std::net::TcpListener::from(socket))?)
 }

@@ -40,7 +40,8 @@ axum = { version = "=0.8.8", features = ["multipart"] }
 if-addrs = "0.13"
 sha2 = "0.10"
 tower = "=0.5.3"
-tower-http = { version = "=0.6.8", features = ["cors", "compression-gzip", "fs"] }
+tower-http = { version = "=0.6.8", features = ["cors", "compression-gzip", "fs", "trace"] }
+flate2 = "1"
 
 # HTTP
 hyper = { version = "=1.8.1", features = ["full"] }
@@ -134,3 +135,6 @@ futures = "=0.3.32"
 
 # Unix signal / system calls
 libc = "=0.2.183"
+
+# Socket options (ToS, keepalive)
+socket2 = { version = "0.5", features = ["all"] }

@@ -34,10 +34,17 @@ pub async fn get(State(state): State<AppState>) -> Json<Value> {
             "min_version": r.tls.min_version,
         },
         "outbound_policy": {
+            "enabled": r.outbound_policy.enabled,
             "max_message_size": r.outbound_policy.max_message_size,
             "max_recipients_per_message": r.outbound_policy.max_recipients_per_message,
             "allowed_sender_domains": r.outbound_policy.allowed_sender_domains,
             "max_messages_per_domain_per_hour": r.outbound_policy.max_messages_per_domain_per_hour,
+            "block_dangerous_attachments": r.outbound_policy.block_dangerous_attachments,
+            "check_urls": r.outbound_policy.check_urls,
+        },
+        "bounce": {
+            "sender": r.bounce.sender,
+            "include_original_headers": r.bounce.include_original_headers,
         },
         "dkim": {
             "enabled": r.dkim.enabled,

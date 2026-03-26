@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Edit Frontend{% endblock %}
+{% block head_extra %}
+<style>
+.fe-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:1.2rem}
+.fe-tab{padding:.45rem 1rem;font-size:.85rem;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted)}
+.fe-tab.active{color:var(--text);border-bottom-color:var(--accent)}
+.fe-panel{display:none}.fe-panel.active{display:block}
+</style>
+{% endblock %}
 {% block content %}
     <div class="toolbar" style="margin-bottom:1rem">
       <h2 style="margin:0;flex:1">Edit Frontend: <span id="feTitle" style="color:var(--muted);font-weight:400"></span></h2>
@@ -8,94 +16,164 @@
 
     <div id="loadError" class="form-error" style="display:none"></div>
 
-    <div id="editPanel" class="form-panel" style="display:none">
-      <div class="form-grid">
-        <div class="form-group">
-          <label>Protocol *</label>
-          <select id="fProtocol">
-            <option value="https">HTTPS</option>
-            <option value="smtps">SMTPS</option>
-            <option value="smtpstarttls">SMTP+STARTTLS</option>
-            <option value="imaps">IMAPS</option>
-            <option value="tcp">TCP</option>
-          </select>
+    <div id="editPanel" style="display:none">
+      <div class="fe-tabs">
+        <div class="fe-tab active"  onclick="feTab('basic')">Basic</div>
+        <div class="fe-tab"         onclick="feTab('backend')">Backend</div>
+        <div class="fe-tab"         onclick="feTab('tls')">TLS</div>
+        <div class="fe-tab"         onclick="feTab('profiles')">Profiles</div>
+        <div class="fe-tab"         onclick="feTab('acl')">ACL</div>
+        <div class="fe-tab"         onclick="feTab('logging')">Logging</div>
+      </div>
+
+      <!-- ── Basic tab ─────────────────────────────────────────────────────── -->
+      <div id="fe-basic" class="form-panel fe-panel active">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Protocol *</label>
+            <select id="fProtocol">
+              <option value="https">HTTPS</option>
+              <option value="smtps">SMTPS</option>
+              <option value="smtpstarttls">SMTP+STARTTLS</option>
+              <option value="imaps">IMAPS</option>
+              <option value="tcp">TCP</option>
+              <option value="stratum">Stratum</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Listen Addresses * (one per line)</label>
+            <textarea id="fListen" placeholder="0.0.0.0:443"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Max Connections (blank = unlimited)</label>
+            <input type="number" id="fMaxConn" min="1" placeholder="">
+          </div>
         </div>
-        <div class="form-group">
-          <label>Listen Addresses * (one per line)</label>
-          <textarea id="fListen" placeholder="0.0.0.0:443"></textarea>
+        <div style="margin-top:.8rem">
+          <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">HTTP Headers</label>
+          <div style="display:flex;gap:1rem;flex-wrap:wrap">
+            <label class="form-check"><input type="checkbox" id="fXFF"> X-Forwarded-For</label>
+            <label class="form-check"><input type="checkbox" id="fXRI"> X-Real-IP</label>
+            <label class="form-check"><input type="checkbox" id="fXFP"> X-Forwarded-Proto</label>
+            <label class="form-check"><input type="checkbox" id="fXFH"> X-Forwarded-Host</label>
+            <label class="form-check"><input type="checkbox" id="fXFPort"> X-Forwarded-Port</label>
+            <label class="form-check"><input type="checkbox" id="fXRID"> X-Request-ID</label>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Backend Pool *</label>
-          <select id="fPool"><option value="">-- select pool --</option></select>
+        <div style="margin-top:.8rem">
+          <div style="display:flex;align-items:center;gap:.7rem;margin-bottom:.4rem">
+            <label style="font-size:.8rem;color:var(--muted);flex:1">Custom Request Headers</label>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="addCustomHeader()">+ Add Header</button>
+          </div>
+          <div id="fCustomHeaderRows"></div>
         </div>
-        <div class="form-group">
-          <label>Balancer</label>
-          <select id="fBalancer" onchange="toggleStickyField()">
-            <option value="round_robin">Round Robin</option>
-            <option value="least_connections">Least Connections</option>
-            <option value="ip_hash">IP Hash</option>
-            <option value="sticky_session">Sticky Session</option>
-          </select>
+        <div id="fSmtpHeadersGroup" style="margin-top:.8rem;display:none">
+          <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">SMTP Headers</label>
+          <div style="display:flex;gap:1rem;flex-wrap:wrap">
+            <label class="form-check"><input type="checkbox" id="fSmtpReceived"> Add Received header</label>
+            <label class="form-check"><input type="checkbox" id="fSmtpXFF"> Add X-Forwarded-For</label>
+          </div>
         </div>
-        <div class="form-group" id="fStickyGroup" style="display:none">
-          <label>Session Cookie Name</label>
-          <input type="text" id="fStickyCookie" placeholder="SWSESSION">
+      </div>
+
+      <!-- ── Backend tab ───────────────────────────────────────────────────── -->
+      <div id="fe-backend" class="form-panel fe-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Backend Pool *</label>
+            <select id="fPool"><option value="">-- select pool --</option></select>
+          </div>
+          <div class="form-group">
+            <label>Balancer</label>
+            <select id="fBalancer" onchange="toggleStickyField()">
+              <option value="round_robin">Round Robin</option>
+              <option value="least_connections">Least Connections</option>
+              <option value="ip_hash">IP Hash</option>
+              <option value="sticky_session">Sticky Session</option>
+            </select>
+          </div>
+          <div class="form-group" id="fStickyGroup" style="display:none">
+            <label>Session Cookie Name</label>
+            <input type="text" id="fStickyCookie" placeholder="SWSESSION">
+          </div>
+          <div class="form-group">
+            <label>WAF Enabled</label>
+            <label class="form-check" style="margin-top:.4rem"><input type="checkbox" id="fWaf"> Enable WAF for this frontend</label>
+          </div>
         </div>
-        <div class="form-group">
-          <label>TLS Certificate</label>
-          <select id="fTlsCertSelect" onchange="syncCertFields()">
-            <option value="">-- none --</option>
-          </select>
-          <input type="hidden" id="fTlsCert">
-          <input type="hidden" id="fTlsKey">
-        </div>
-        <div class="form-group">
-          <label>WAF Ruleset</label>
-          <select id="fWafRuleset"><option value="">-- none --</option></select>
-        </div>
-        <div class="form-group">
-          <label>Frontend Profile</label>
-          <select id="fSecurityProfile"><option value="">-- none --</option></select>
-        </div>
-        <div class="form-group">
-          <label>Logging Profile</label>
-          <select id="fLogProfile"><option value="">-- none --</option></select>
-        </div>
-        <div class="form-group">
-          <label>Max Connections (blank = unlimited)</label>
-          <input type="number" id="fMaxConn" min="1" placeholder="">
-        </div>
-        <div class="form-group">
-          <label>ACL Default Action</label>
-          <select id="fAclDefault">
-            <option value="allow">Allow</option>
-            <option value="deny">Deny</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Log File</label>
-          <input type="text" id="fLogFile" placeholder="/opt/serverwall/var/log/web.log">
-        </div>
-        <div class="form-group">
-          <label>Log Format</label>
-          <select id="fLogFormat">
-            <option value="">— default —</option>
-            <option value="apache_combined">Apache Combined</option>
-            <option value="json">JSON</option>
-            <option value="logfmt">logfmt</option>
-          </select>
-        </div>
-        <div class="form-group" id="fTlsMinVersionGroup">
-          <label>TLS Minimum Version</label>
-          <select id="fTlsMinVersion">
-            <option value="">— inherit global —</option>
-            <option value="1.2">TLS 1.2+</option>
-            <option value="1.3">TLS 1.3 only</option>
-          </select>
+      </div>
+
+      <!-- ── TLS tab ───────────────────────────────────────────────────────── -->
+      <div id="fe-tls" class="form-panel fe-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>TLS Certificate (from certs directory)</label>
+            <select id="fTlsCertSelect" onchange="syncCertFields()">
+              <option value="">-- none --</option>
+            </select>
+            <input type="hidden" id="fTlsCert">
+            <input type="hidden" id="fTlsKey">
+          </div>
+          <div class="form-group">
+            <label>TLS Chain File (optional separate PEM chain)</label>
+            <input type="text" id="fTlsChain" placeholder="/opt/serverwall/etc/certs/chain.pem">
+            <div style="font-size:.75rem;color:var(--muted);margin-top:.2rem">Only needed when cert file does not include the full chain.</div>
+          </div>
+          <div class="form-group">
+            <label>TLS Key Password (optional, for encrypted key files)</label>
+            <input type="password" id="fTlsKeyPassword" placeholder="leave blank if key is unencrypted">
+          </div>
+          <div class="form-group">
+            <label>PKCS#12 / PFX File (optional alternative to cert+key)</label>
+            <input type="text" id="fTlsPfx" placeholder="/opt/serverwall/etc/certs/site.pfx">
+          </div>
+          <div class="form-group">
+            <label>PFX Password (optional)</label>
+            <input type="password" id="fTlsPfxPassword" placeholder="leave blank if unprotected">
+          </div>
+          <div class="form-group" id="fTlsMinVersionGroup">
+            <label>TLS Minimum Version</label>
+            <select id="fTlsMinVersion">
+              <option value="">— inherit global —</option>
+              <option value="1.2">TLS 1.2+</option>
+              <option value="1.3">TLS 1.3 only</option>
+            </select>
+          </div>
         </div>
         <div class="form-group" id="fTlsCiphersGroup">
           <label>TLS Cipher Suites (one per line, blank = rustls defaults)</label>
           <textarea id="fTlsCiphers" rows="5" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.78rem" placeholder="TLS_AES_256_GCM_SHA384&#10;TLS_AES_128_GCM_SHA256&#10;TLS_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256&#10;TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384&#10;TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256&#10;TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256"></textarea>
+        </div>
+      </div>
+
+      <!-- ── Profiles tab ──────────────────────────────────────────────────── -->
+      <div id="fe-profiles" class="form-panel fe-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>WAF Ruleset</label>
+            <select id="fWafRuleset"><option value="">-- none --</option></select>
+          </div>
+          <div class="form-group">
+            <label>Frontend Profile</label>
+            <select id="fSecurityProfile"><option value="">-- none --</option></select>
+          </div>
+          <div class="form-group">
+            <label>Logging Profile</label>
+            <select id="fLogProfile"><option value="">-- none --</option></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ACL tab ───────────────────────────────────────────────────────── -->
+      <div id="fe-acl" class="form-panel fe-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>ACL Default Action</label>
+            <select id="fAclDefault">
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
+            </select>
+          </div>
         </div>
         <div class="form-group">
           <label>ACL Allow List (IPs/CIDRs, one per line)</label>
@@ -106,35 +184,31 @@
           <textarea id="fAclBlock" rows="3" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:.82rem" placeholder="203.0.113.0/24"></textarea>
         </div>
       </div>
-      <div style="margin-top:.8rem">
-        <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">HTTP Headers</label>
-        <div style="display:flex;gap:1rem;flex-wrap:wrap">
-          <label class="form-check"><input type="checkbox" id="fXFF"> X-Forwarded-For</label>
-          <label class="form-check"><input type="checkbox" id="fXRI"> X-Real-IP</label>
-          <label class="form-check"><input type="checkbox" id="fXFP"> X-Forwarded-Proto</label>
-          <label class="form-check"><input type="checkbox" id="fXFH"> X-Forwarded-Host</label>
-          <label class="form-check"><input type="checkbox" id="fXFPort"> X-Forwarded-Port</label>
-          <label class="form-check"><input type="checkbox" id="fXRID"> X-Request-ID</label>
-          <label class="form-check"><input type="checkbox" id="fAccessLog"> Access Log</label>
-          <label class="form-check"><input type="checkbox" id="fWaf"> WAF Enabled</label>
+
+      <!-- ── Logging tab ───────────────────────────────────────────────────── -->
+      <div id="fe-logging" class="form-panel fe-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Log File</label>
+            <input type="text" id="fLogFile" placeholder="/opt/serverwall/var/log/web.log">
+          </div>
+          <div class="form-group">
+            <label>Log Format</label>
+            <select id="fLogFormat">
+              <option value="">— default —</option>
+              <option value="apache_combined">Apache Combined</option>
+              <option value="json">JSON</option>
+              <option value="logfmt">logfmt</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:.6rem">
+          <label class="form-check"><input type="checkbox" id="fAccessLog"> Access Log Enabled</label>
         </div>
       </div>
-      <div style="margin-top:.8rem">
-        <div style="display:flex;align-items:center;gap:.7rem;margin-bottom:.4rem">
-          <label style="font-size:.8rem;color:var(--muted);flex:1">Custom Request Headers</label>
-          <button type="button" class="btn btn-secondary btn-sm" onclick="addCustomHeader()">+ Add Header</button>
-        </div>
-        <div id="fCustomHeaderRows"></div>
-      </div>
-      <div id="fSmtpHeadersGroup" style="margin-top:.8rem;display:none">
-        <label style="font-size:.8rem;color:var(--muted);display:block;margin-bottom:.3rem">SMTP Headers</label>
-        <div style="display:flex;gap:1rem;flex-wrap:wrap">
-          <label class="form-check"><input type="checkbox" id="fSmtpReceived"> Add Received header</label>
-          <label class="form-check"><input type="checkbox" id="fSmtpXFF"> Add X-Forwarded-For</label>
-        </div>
-      </div>
+
       <div id="saveError" class="form-error" style="display:none;margin-top:.8rem"></div>
-      <div class="form-actions">
+      <div class="form-actions" style="margin-top:1.2rem">
         <button class="btn btn-primary" onclick="saveFrontend()">Save Changes</button>
         <a href="/ui/frontends.html" class="btn btn-secondary">Cancel</a>
       </div>
@@ -160,6 +234,13 @@ var STRONG_CIPHERS = [
 
 function getFeName() {
   return new URLSearchParams(window.location.search).get('name') || '';
+}
+
+function feTab(name) {
+  var tabs = ['basic','backend','tls','profiles','acl','logging'];
+  document.querySelectorAll('.fe-tab').forEach(function(t,i){ t.classList.toggle('active', tabs[i]===name); });
+  document.querySelectorAll('.fe-panel').forEach(function(p){ p.classList.remove('active'); });
+  document.getElementById('fe-'+name).classList.add('active');
 }
 
 function toggleStickyField() {
@@ -226,7 +307,6 @@ async function loadDropdowns(currentPool, currentWaf, currentCert, currentProfil
       if (!c.key_exists) return;
       var opt = document.createElement('option');
       opt.value = c.name; opt.textContent = c.name + (c.expiry ? '  (exp: '+c.expiry+')' : '');
-      // Match by cert_file path if current cert path ends with cert name
       if (currentCert && currentCert.indexOf(c.name) !== -1) opt.selected = true;
       certSel.appendChild(opt);
       _certMap[c.name] = {
@@ -286,37 +366,46 @@ async function loadFrontend() {
     }
     var f = d.frontend;
 
-    // Populate form
+    // Basic
     setSelect('fProtocol', (f.protocol || 'https').toLowerCase());
     document.getElementById('fListen').value   = (f.listen || []).join('\n');
     document.getElementById('fMaxConn').value  = f.max_connections || '';
-    document.getElementById('fLogFile').value  = f.log_file || '';
     document.getElementById('fXFF').checked      = !!(f.headers && f.headers.x_forwarded_for);
     document.getElementById('fXRI').checked      = !!(f.headers && f.headers.x_real_ip);
     document.getElementById('fXFP').checked      = !!(f.headers && f.headers.x_forwarded_proto);
     document.getElementById('fXFH').checked      = !!(f.headers && f.headers.x_forwarded_host);
     document.getElementById('fXFPort').checked   = !!(f.headers && f.headers.x_forwarded_port);
     document.getElementById('fXRID').checked     = !!(f.headers && f.headers.x_request_id);
-    document.getElementById('fAccessLog').checked = !!f.access_log;
-    document.getElementById('fWaf').checked      = !!f.waf_enabled;
     document.getElementById('fSmtpReceived').checked = !!(f.smtp_headers && f.smtp_headers.add_received);
     document.getElementById('fSmtpXFF').checked      = !!(f.smtp_headers && f.smtp_headers.x_forwarded_for);
-    if (f.log_format) setSelect('fLogFormat', f.log_format);
-    if (f.tls_min_version) setSelect('fTlsMinVersion', f.tls_min_version);
-    // TLS ciphers — pre-fill with strong defaults when none configured
-    var ciphers = f.tls_ciphers || [];
-    document.getElementById('fTlsCiphers').value = ciphers.length ? ciphers.join('\n') : STRONG_CIPHERS;
-    // ACL
-    document.getElementById('fAclAllow').value = (f.acl && f.acl.allow_list || []).join('\n');
-    document.getElementById('fAclBlock').value = (f.acl && f.acl.block_list || []).join('\n');
-    // Custom request headers
     _customHeaders = (f.headers && f.headers.custom) ? f.headers.custom.slice() : [];
     renderCustomHeaders();
     toggleProtocolFields();
+
+    // Backend
     setSelect('fBalancer', (f.balancer || 'round_robin').toLowerCase());
     toggleStickyField();
     if (f.session_cookie) document.getElementById('fStickyCookie').value = f.session_cookie;
+    document.getElementById('fWaf').checked = !!f.waf_enabled;
+
+    // TLS
+    var ciphers = f.tls_ciphers || [];
+    document.getElementById('fTlsCiphers').value = ciphers.length ? ciphers.join('\n') : STRONG_CIPHERS;
+    if (f.tls_min_version) setSelect('fTlsMinVersion', f.tls_min_version);
+    document.getElementById('fTlsChain').value       = f.tls_chain || '';
+    document.getElementById('fTlsKeyPassword').value = f.tls_key_password || '';
+    document.getElementById('fTlsPfx').value         = f.tls_pfx || '';
+    document.getElementById('fTlsPfxPassword').value = f.tls_pfx_password || '';
+
+    // ACL
+    document.getElementById('fAclAllow').value = (f.acl && f.acl.allow_list || []).join('\n');
+    document.getElementById('fAclBlock').value = (f.acl && f.acl.block_list || []).join('\n');
     if (f.acl) setSelect('fAclDefault', (f.acl.default_action || 'allow').toLowerCase());
+
+    // Logging
+    document.getElementById('fLogFile').value  = f.log_file || '';
+    document.getElementById('fAccessLog').checked = !!f.access_log;
+    if (f.log_format) setSelect('fLogFormat', f.log_format);
 
     await loadDropdowns(f.backend_pool, f.waf_ruleset, f.tls_cert, f.security_profile, f.log_profile);
     document.getElementById('editPanel').style.display = '';
@@ -351,7 +440,6 @@ async function saveFrontend() {
   var allowRaw = document.getElementById('fAclAllow').value.trim();
   var blockRaw = document.getElementById('fAclBlock').value.trim();
 
-  // Collect custom headers (filter out incomplete rows)
   var customHeaders = _customHeaders.filter(function(h){return h.name.trim() && h.value.trim();});
 
   var body = {
@@ -382,6 +470,7 @@ async function saveFrontend() {
       block_list: blockRaw ? blockRaw.split('\n').map(function(s){return s.trim()}).filter(Boolean) : [],
     },
   };
+
   var logFmt = document.getElementById('fLogFormat').value;
   if (logFmt) body.log_format = logFmt;
   var tlsMin = document.getElementById('fTlsMinVersion').value;
@@ -401,9 +490,17 @@ async function saveFrontend() {
 
   var certVal = document.getElementById('fTlsCert').value.trim();
   if (certVal) body.tls_cert = certVal;
-
   var keyVal = document.getElementById('fTlsKey').value.trim();
   if (keyVal) body.tls_key = keyVal;
+
+  var tlsChain = document.getElementById('fTlsChain').value.trim();
+  if (tlsChain) body.tls_chain = tlsChain;
+  var tlsKeyPw = document.getElementById('fTlsKeyPassword').value;
+  if (tlsKeyPw) body.tls_key_password = tlsKeyPw;
+  var tlsPfx = document.getElementById('fTlsPfx').value.trim();
+  if (tlsPfx) body.tls_pfx = tlsPfx;
+  var tlsPfxPw = document.getElementById('fTlsPfxPassword').value;
+  if (tlsPfxPw) body.tls_pfx_password = tlsPfxPw;
 
   var logFile = document.getElementById('fLogFile').value.trim();
   if (logFile) body.log_file = logFile;

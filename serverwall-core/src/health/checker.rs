@@ -195,10 +195,11 @@ impl HealthChecker {
     /// Perform a single health check against one backend.
     async fn check_backend(&self, backend: &Backend) -> bool {
         match self.check_type {
-            HealthCheckType::Tcp => self.check_tcp(backend).await,
-            HealthCheckType::Http => self.check_http(backend).await,
-            HealthCheckType::Smtp => self.check_smtp(backend).await,
-            HealthCheckType::Imap => self.check_imap(backend).await,
+            HealthCheckType::Tcp     => self.check_tcp(backend).await,
+            HealthCheckType::Http    => self.check_http(backend).await,
+            HealthCheckType::Smtp    => self.check_smtp(backend).await,
+            HealthCheckType::Imap    => self.check_imap(backend).await,
+            HealthCheckType::Stratum => self.check_stratum(backend).await,
         }
     }
 
@@ -327,6 +328,51 @@ impl HealthChecker {
                     backend = %backend.id,
                     tls = use_tls,
                     "SMTP health check timed out",
+                );
+                false
+            }
+        }
+    }
+
+    /// Stratum check: connect, send `mining.subscribe`, verify a successful JSON-RPC response.
+    async fn check_stratum(&self, backend: &Backend) -> bool {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use crate::proto::stratum;
+
+        let addr = backend.address;
+        let to = self.timeout;
+
+        let result = timeout(to, async move {
+            let stream = TcpStream::connect(addr).await?;
+            let mut buf = BufReader::new(stream);
+            let req = b"{\"id\":1,\"method\":\"mining.subscribe\",\"params\":[\"serverwall-healthcheck/1.0\",null]}\n";
+            buf.get_mut().write_all(req).await?;
+            let mut line = String::new();
+            let n = buf.read_line(&mut line).await?;
+            if n == 0 {
+                return Ok::<bool, std::io::Error>(false);
+            }
+            let ok = stratum::parse_line(&line)
+                .map(|msg| stratum::is_success_response(&msg, 1))
+                .unwrap_or(false);
+            Ok::<bool, std::io::Error>(ok)
+        })
+        .await;
+
+        match result {
+            Ok(Ok(healthy)) => healthy,
+            Ok(Err(e)) => {
+                tracing::debug!(
+                    backend = %backend.id,
+                    error = %e,
+                    "Stratum health check failed",
+                );
+                false
+            }
+            Err(_) => {
+                tracing::debug!(
+                    backend = %backend.id,
+                    "Stratum health check timed out",
                 );
                 false
             }
